@@ -803,9 +803,10 @@ def restore_symbols(text, marks):
 
 
 def keeps_numbers(src, out):
-    want = re.findall(r"\d+", src)
+    # 전각 숫자(３)가 반각(3)으로 번역돼도 같은 번호로 본다
+    want = re.findall(r"\d+", unicodedata.normalize("NFKC", src))
     i = 0
-    for n in re.findall(r"\d+", out):
+    for n in re.findall(r"\d+", unicodedata.normalize("NFKC", out)):
         if i < len(want) and n == want[i]:
             i += 1
     return i == len(want)
