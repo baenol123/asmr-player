@@ -937,6 +937,18 @@ def work_key(name):
     return m.group(0).upper() if m else name
 
 
+def follow_renames(moved):
+    """여러 번 바뀐 경로는 마지막 경로로 잇는다."""
+    out = {}
+    for start, path in moved.items():
+        seen = {start}
+        while path in moved and path not in seen:
+            seen.add(path)
+            path = moved[path]
+        out[start] = path
+    return out
+
+
 def rename_map():
     """앱이 재생 기록·즐겨찾기를 새 경로로 옮길 때 쓴다."""
     files, works = {}, {}
@@ -944,7 +956,7 @@ def rename_map():
         files.update(run["files"])
         if run["old"] != run["new"]:
             works[run["old"]] = run["new"]
-    return {"files": files, "works": works}
+    return {"files": follow_renames(files), "works": follow_renames(works)}
 
 
 def rename_work(folder, root):
