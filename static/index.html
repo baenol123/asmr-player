@@ -814,6 +814,35 @@ audio.onloadedmetadata = () => {
     renderResume();
   }
 };
+// 앱을 켜둔 사이 이름 번역으로 경로가 바뀌면 재생이 실패한다. 목록을 새로 받아 이어서 재생한다
+let recovering = false;
+audio.onerror = async () => {
+  const t = queue[curIdx];
+  if (!t || !audio.getAttribute("src") || recovering) return;
+  recovering = true;
+  try {
+    const { files, works: moved } = await (await fetch("/api/renames")).json();
+    const to = p => files[p] || p;
+    if (to(t.path) === t.path) { showToast("이 브라우저에서 재생할 수 없는 파일입니다"); return; }
+    const paths = queue.map(x => to(x.path)), target = to(t.path), id = moved[playWork.id] || playWork.id;
+    const reopen = curWork && curWork.id === playWork.id;
+    await applyRenames();
+    works = await (await fetch("/api/works")).json();
+    renderLibrary();
+    const w = works.find(x => x.id === id);
+    const tracks = w ? paths.map(p => w.tracks.find(x => x.path === p)).filter(Boolean) : [];
+    const i = tracks.findIndex(x => x.path === target);
+    if (i < 0) { showToast("파일을 찾지 못했습니다. 새로고침해 주세요"); return; }
+    if (reopen) { curWork = w; renderTracks(w); }
+    showToast("이름이 바뀌어 목록을 새로 불러왔습니다");
+    playTrack(w, i, false, tracks);
+  } catch (e) {
+    showToast("재생하지 못했습니다");
+  } finally {
+    recovering = false;
+  }
+};
+
 let toastTimer = null;
 function showToast(text) {
   const el = $("toast");
