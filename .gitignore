@@ -1,0 +1,15 @@
+# 키와 개인 설정
+*_key.txt
+번역지시.txt
+용어집.txt
+교정치환.txt
+
+# 작품과 생성물
+works/*
+!works/여기에 작품 폴더를 넣으세요.txt
+cache/
+
+# 파이썬
+__pycache__/
+*.pyc
+*.bak-*
