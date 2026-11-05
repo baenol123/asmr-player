@@ -18,6 +18,7 @@ import re
 import socket
 import time
 import unicodedata
+import zlib
 from pathlib import Path
 
 import requests
@@ -192,12 +193,12 @@ _scan_cache = {}
 
 
 def dir_signature(folder):
-    """폴더 내용이 바뀌었는지 판별할 값. (파일 수, 총 크기, 최신 mtime)
+    """폴더 내용이 바뀌었는지 판별할 값. (파일 수, 총 크기, 최신 mtime, 경로 해시)
 
     scandir 는 디렉터리 열거와 함께 stat 정보를 돌려주므로(윈도우) 거의 공짜다.
     파일 mtime 까지 보기 때문에 '파일 수는 그대로인데 내용만 수정' 도 잡힌다 —
     자막을 제자리에서 고쳐도 캐시가 무효화된다."""
-    count = total = 0
+    count = total = names = 0
     newest = 0.0
     stack = [folder]
     while stack:
@@ -207,6 +208,8 @@ def dir_signature(folder):
             continue  # 접근 불가 폴더는 건너뛴다
         with it:
             for e in it:
+                # 이름만 바뀌면 수·크기·mtime 이 그대로라 경로까지 봐야 옛 경로를 내보내지 않는다
+                names += zlib.crc32(e.path.encode("utf-8", "surrogatepass"))
                 try:
                     if e.is_dir(follow_symlinks=False):
                         stack.append(e.path)
@@ -218,7 +221,7 @@ def dir_signature(folder):
                 total += st.st_size
                 if st.st_mtime > newest:
                     newest = st.st_mtime
-    return count, total, round(newest, 3)
+    return count, total, round(newest, 3), names
 
 
 def scan_work_dir(folder):
