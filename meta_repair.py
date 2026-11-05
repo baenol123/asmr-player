@@ -19,7 +19,7 @@ try:
 except (AttributeError, OSError):
     pass
 
-from server import (META_DIR, deepl_key, load_meta, needs_translation, save_meta,
+from server import (META_DIR, deepl_key, gemini_key, load_meta, needs_translation, save_meta,
                     translate_ko_batch)
 
 p = argparse.ArgumentParser()
@@ -30,7 +30,7 @@ args = p.parse_args()
 
 if args.models:
     import requests
-    from server import GEMINI_MODEL, gemini_key
+    from server import GEMINI_MODEL
     key = gemini_key()
     if not key:
         sys.exit("GEMINI_API_KEY 가 없습니다. gemini_key.txt 를 만드세요.")
@@ -73,10 +73,10 @@ if tr_targets:
     if not args.apply:
         for rj, _meta, title in tr_targets:
             print(f"  - {rj}  {title[:60]}")
-    elif not deepl_key():
-        print("  DEEPL_API_KEY 가 없어 건너뜁니다. deepl_key.txt 를 만들거나 환경변수를 설정하세요.")
+    elif not gemini_key() and not deepl_key():
+        print("  번역 키가 없어 건너뜁니다. gemini_key.txt 또는 deepl_key.txt 를 만드세요.")
     else:
-        # DeepL은 한 요청에 최대 50개 — 하나씩 부르지 않고 묶어서 보낸다
+        # 하나씩 부르지 않고 묶어서 보낸다
         result = translate_ko_batch([t for _rj, _m, t in tr_targets])
         for (rj, meta, title), ko in zip(tr_targets, result or [None] * len(tr_targets)):
             if ko:

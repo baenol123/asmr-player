@@ -11,6 +11,7 @@ DLsite 구매작 로컬 라이브러리 서버 (모바일 웹앱용)
 자막: 오디오 파일과 같은 이름의 .srt/.vtt/.txt(SRT 구조) 파일을
 아무 하위 폴더에나 두면 자동 매칭. 같은 이름이 여럿이면 srt > vtt > txt 순.
 """
+import gzip
 import json
 import os
 import re
@@ -34,6 +35,7 @@ PORT = int(os.environ.get("ASMR_PORT", "8974"))
 AUDIO_EXTS = {".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".mp4", ".webm"}
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 SUB_EXTS = {".srt": 0, ".vtt": 1, ".txt": 2}  # 값이 작을수록 우선
+COMPRESSIBLE = {"text/html", "text/plain", "application/json", "application/manifest+json"}
 HANGUL_CHARS = re.compile(r"[가-힣]")
 KANA_CHARS = re.compile(r"[ぁ-ヿ]")
 HAN_CHARS = re.compile(r"[一-鿿]")
@@ -50,6 +52,7 @@ RETRY_AFTER_FETCH_ERROR = 6 * 3600
 RETRY_AFTER_NOTFOUND = 30 * 86400
 
 app = Flask(__name__, static_folder=str(BASE / "static"), static_url_path="/static")
+app.json.ensure_ascii = False   # 한글을 \uXXXX 로 늘리지 않는다
 
 for d in (WORKS_DIR, META_DIR, COVER_DIR):
     d.mkdir(parents=True, exist_ok=True)
@@ -623,6 +626,30 @@ def no_stale_cache(resp):
     # 오디오·표지는 그대로 캐시 가능.
     if resp.mimetype in ("text/html", "application/json", "application/manifest+json"):
         resp.headers["Cache-Control"] = "no-cache"
+    return compress_response(resp)
+
+
+def compress_response(resp):
+    """글자 응답만 압축한다. 오디오·이미지와 Range 응답은 그대로 둔다 (시크가 깨지지 않게)."""
+    if resp.status_code != 200 or resp.mimetype not in COMPRESSIBLE or "Content-Encoding" in resp.headers:
+        return resp
+    resp.direct_passthrough = False
+    if resp.mimetype == "application/json":
+        # 내용이 그대로면 304 로 답해 작품 목록을 다시 내려받지 않게 한다
+        resp.add_etag(weak=True)
+        resp.make_conditional(request)
+        if resp.status_code == 304:
+            return resp
+    resp.vary.add("Accept-Encoding")
+    data = resp.get_data()
+    if len(data) < 500 or "gzip" not in request.headers.get("Accept-Encoding", ""):
+        return resp
+    resp.set_data(gzip.compress(data, 6))
+    resp.headers["Content-Encoding"] = "gzip"
+    resp.headers.pop("Accept-Ranges", None)
+    etag, _ = resp.get_etag()
+    if etag:
+        resp.set_etag(etag, weak=True)   # 압축본은 원본과 바이트가 달라 약한 ETag 로 표시한다
     return resp
 
 
