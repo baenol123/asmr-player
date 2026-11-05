@@ -263,7 +263,12 @@ def load_glossary(work):
 def apply_corrections(text, corrections):
     # 긴 항목부터 적용해 부분 문자열 충돌을 피한다
     for wrong in sorted(corrections, key=len, reverse=True):
-        text = text.replace(wrong, corrections[wrong])
+        fixed = corrections[wrong]
+        if wrong.isascii() and wrong.isalnum():
+            # 영문 항목은 단어로 쓰일 때만 바꾼다 — 'M' 때문에 ASMR, MP3 가 망가지지 않게
+            text = re.sub(rf"(?<![A-Za-z0-9]){re.escape(wrong)}(?![A-Za-z0-9])", lambda _: fixed, text)
+        else:
+            text = text.replace(wrong, fixed)
     return text
 
 
