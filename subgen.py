@@ -921,7 +921,7 @@ def read_name_log():
         data = json.loads(name_log_file().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         data = {}
-    return {"runs": data.get("runs", []), "skip": data.get("skip", [])}
+    return {"runs": data.get("runs", []), "skip": data.get("skip", []), "checked": data.get("checked", {})}
 
 
 def write_name_log(log):
@@ -1295,9 +1295,20 @@ def process_work(folder, root, scan, decode, tried):
     return 0
 
 
-def translate_names(folder, root, sig, tried):
+def remember_checked(folder, root, signature):
+    """이 상태의 폴더는 확인을 마쳤다고 기록한다. 재시작해도 같은 경고와 API 호출이 반복되지 않게."""
+    log = read_name_log()
+    current = folder if folder.exists() else root / rename_map()["works"].get(folder.name, folder.name)
+    if current.exists():
+        log["checked"][work_key(folder.name)] = list(signature(current))
+        write_name_log(log)
+
+
+def translate_names(folder, root, sig, tried, signature):
     key = f"names:{folder.name}:{sig}"
-    if not NAMES_ON or key in tried or work_key(folder.name) in read_name_log()["skip"]:
+    log_state = read_name_log()
+    if (not NAMES_ON or key in tried or work_key(folder.name) in log_state["skip"]
+            or log_state["checked"].get(work_key(folder.name)) == list(sig)):
         return 0
     tried.add(key)
     try:
@@ -1315,6 +1326,7 @@ def translate_names(folder, root, sig, tried):
         log(f"이름 번역 {len(moved)}개: {folder.name}")
     for p in problems:
         notify("warn", folder.name, p)
+    remember_checked(folder, root, signature)
     return 0
 
 
@@ -1329,7 +1341,7 @@ def sweep(root, scan, signature, decode, seen, tried):
             pause = process_work(folder, root, scan, decode, tried)
             if pause:
                 return pause
-            pause = translate_names(folder, root, sig, tried)
+            pause = translate_names(folder, root, sig, tried, signature)
             if pause:
                 return pause
     return 0
