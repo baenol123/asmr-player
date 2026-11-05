@@ -266,7 +266,7 @@ def apply_corrections(text, corrections):
         fixed = corrections[wrong]
         if wrong.isascii() and wrong.isalnum():
             # 영문 항목은 단어로 쓰일 때만 바꾼다 — 'M' 때문에 ASMR, MP3 가 망가지지 않게
-            text = re.sub(rf"(?<![A-Za-z0-9]){re.escape(wrong)}(?![A-Za-z0-9])", lambda _: fixed, text)
+            text = re.sub(rf"(?<![A-Za-z0-9_]){re.escape(wrong)}(?![A-Za-z0-9_])", lambda _: fixed, text)
         else:
             text = text.replace(wrong, fixed)
     return text
