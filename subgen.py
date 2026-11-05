@@ -261,15 +261,15 @@ def load_glossary(work):
 
 
 def apply_corrections(text, corrections):
-    # 긴 항목부터 적용해 부분 문자열 충돌을 피한다
-    for wrong in sorted(corrections, key=len, reverse=True):
-        fixed = corrections[wrong]
-        if wrong.isascii() and wrong.isalnum():
-            # 영문 항목은 단어로 쓰일 때만 바꾼다 — 'M' 때문에 ASMR, MP3 가 망가지지 않게
-            text = re.sub(rf"(?<![A-Za-z0-9_]){re.escape(wrong)}(?![A-Za-z0-9_])", lambda _: fixed, text)
-        else:
-            text = text.replace(wrong, fixed)
-    return text
+    """한 번에 치환한다. 'M자 = M자' 처럼 짧은 항목에서 지켜야 할 표현이 다시 바뀌지 않게 하기 위해서다."""
+    if not corrections:
+        return text
+    parts = []
+    for wrong in sorted(corrections, key=len, reverse=True):   # 긴 항목 우선
+        part = re.escape(wrong)
+        # 영문 항목은 단어로 쓰일 때만 바꾼다 — 'M' 때문에 ASMR, MP3 가 망가지지 않게
+        parts.append(rf"(?<![A-Za-z0-9_]){part}(?![A-Za-z0-9_])" if wrong.isascii() and wrong.isalnum() else part)
+    return re.sub("|".join(parts), lambda m: corrections[m.group(0)], text)
 
 
 # ── SRT ──────────────────────────────────────────────────────────────
