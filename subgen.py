@@ -1069,19 +1069,40 @@ def rename_work(folder, root):
 
 
 def undo_names(root, key):
-    """이름 번역을 되돌리고, 이후 자동으로 다시 바꾸지 않게 표시한다. 서버를 끄고 실행한다."""
+    """이름 번역을 되돌리고, 이후 자동으로 다시 바꾸지 않게 표시한다. 서버를 끄고 실행한다.
+
+    (되돌린 수, 사라진 파일 목록, 오류) 를 돌려준다. 중간에 실패하면 거기서 멈추고 끝낸 만큼만
+    기록에서 지운다. 원인을 해결하고 다시 실행하면 남은 것부터 이어서 되돌린다."""
     key = work_key(key)
     log = read_name_log()
-    count = 0
-    for run in reversed([r for r in log["runs"] if r["key"] == key]):
-        for old, new in reversed(run["ops"]):
-            os.rename(root / new, root / old)
-            count += 1
-    log["runs"] = [r for r in log["runs"] if r["key"] != key]
     if key not in log["skip"]:
-        log["skip"].append(key)
-    write_name_log(log)
-    return count
+        log["skip"].append(key)   # 일부만 되돌린 채 서버가 켜져도 다시 바꾸지 않게 먼저 표시한다
+    count, missing, error = 0, [], None
+    try:
+        for run in reversed([r for r in log["runs"] if r["key"] == key]):
+            while run["ops"]:
+                old, new = run["ops"][-1]
+                src, dst = root / new, root / old
+                if not src.exists() and dst.exists():
+                    pass   # 이전 실행이 이미 되돌린 항목
+                elif not src.exists():
+                    missing.append(new)   # 사용자가 지운 파일 — 되돌릴 것이 없으니 건너뛴다
+                elif dst.exists():
+                    # POSIX 의 rename 은 파일을 말없이 덮어쓴다 — 원본을 잃지 않게 먼저 막는다
+                    error = f"되돌릴 자리에 같은 이름이 이미 있습니다: {old}"
+                else:
+                    try:
+                        os.rename(src, dst)
+                        count += 1
+                    except OSError as e:
+                        error = f"{new} → {old}: {e.strerror or e}"
+                if error:
+                    return count, missing, error
+                run["ops"].pop()
+            log["runs"].remove(run)
+        return count, missing, None
+    finally:
+        write_name_log(log)
 
 
 # ── 자동 감시 ────────────────────────────────────────────────────────
@@ -1373,6 +1394,11 @@ def start(root, scan, signature, decode):
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "undo":
         from server import WORKS_DIR
-        print(f"되돌린 이름: {undo_names(WORKS_DIR, sys.argv[2])}개")
+        count, missing, error = undo_names(WORKS_DIR, sys.argv[2])
+        print(f"되돌린 이름: {count}개")
+        for path in missing:
+            print(f"  없어서 건너뜀: {path}")
+        if error:
+            sys.exit(f"중단: {error}\n원인을 해결한 뒤 같은 명령을 다시 실행하면 남은 것부터 이어서 되돌립니다.")
     else:
         sys.exit("사용법: python subgen.py undo RJ01234567")
