@@ -5,8 +5,8 @@
   "display": "fullscreen",
   "display_override": ["fullscreen", "standalone"],
   "orientation": "any",
-  "background_color": "#0f1117",
-  "theme_color": "#0f1117",
+  "background_color": "#141415",
+  "theme_color": "#141415",
   "icons": [
     { "src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
   ]
