@@ -25,8 +25,8 @@
   --safe-b: env(safe-area-inset-bottom, 0px);
 }
 :root[data-theme="black"] {
-  /* OLED — 완전한 검정 */
-  --bg: #000; --bg2: #0e0e0f; --bg3: #19191a;
+  /* OLED — 완전한 검정. 면은 칠하지 않고 테두리로만 구분한다 */
+  --bg: #000; --bg2: #000; --bg3: #000;
   --fg: #ededed; --fg-dim: #a1a1a6;
   --line: rgba(255,255,255,.08); --line2: rgba(255,255,255,.06); --card-line: rgba(255,255,255,.08);
   --dim2: #85858b; --dim3: #85858b;
@@ -401,6 +401,11 @@ body.immersive #p-cue { flex: 1; max-height: none; line-height: 1.7; }
     grid-template-areas: "top" "cue";
   }
 }
+/* OLED: 면이 검정이라 배경색으로 구분하던 곳은 옅은 흰색을 겹쳐 보이게 한다 */
+:root[data-theme="black"] #d-tags span,
+:root[data-theme="black"] .cue-line.cur { background: rgba(255,255,255,.09); }
+:root[data-theme="black"] .track:active { background: rgba(255,255,255,.06); }
+:root[data-theme="black"] #search { border: 1px solid var(--line); }
 </style>
 </head>
 <body>
