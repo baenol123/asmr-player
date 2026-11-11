@@ -394,18 +394,36 @@ def extract_chunks(audio, folder):
     return [(p, i * CHUNK_SECONDS) for i, p in enumerate(chunks)]
 
 
-def transcribe_chunk(path, offset, key):
+def keyterms_for(work):
+    """용어집 원문 중 받아쓰기에 도움이 되는 것. 한글 항목은 받아쓰기 결과에 나올 일이 없어 뺀다.
+    ElevenLabs 제한: 1000개, 50자, 5단어."""
+    terms = []
+    for term in load_glossary(work):
+        if re.search(r"[가-힣ㄱ-ㅎㅏ-ㅣ]", term) or len(term) > 50 or len(term.split()) > 5 or term in terms:
+            continue
+        terms.append(term)
+    return terms[:1000]
+
+
+def transcribe_chunk(path, offset, key, keyterms=()):
     for attempt in range(1, 5):
+        data = {"model_id": ELEVENLABS_MODEL, "diarize": "true", "timestamps_granularity": "word"}
+        if keyterms:
+            data["keyterms"] = list(keyterms)
         with open(path, "rb") as f:
             r = requests.post(
                 ELEVENLABS_URL, headers={"xi-api-key": key},
-                data={"model_id": ELEVENLABS_MODEL, "diarize": "true", "timestamps_granularity": "word"},
-                files={"file": ("audio" + path.suffix, f)}, timeout=(15, 1800))
+                data=data, files={"file": ("audio" + path.suffix, f)}, timeout=(15, 1800))
         if r.status_code == 429 and attempt < 4:
             time.sleep(30)
             continue
         if r.status_code in (401, 402, 403, 404, 429):
             raise FatalApiError(f"ElevenLabs 오류 {r.status_code}: {r.text[:200]}")
+        if r.status_code in (400, 422) and keyterms and "keyword" in r.text.lower():
+            # 용어집 항목 때문에 거부되면 용어 없이 받아쓴다 — 용어집 실수로 자막이 안 생기지 않게
+            log(f"용어집 단어를 ElevenLabs 가 거부해 용어 없이 받아씁니다: {r.text[:200]}")
+            keyterms = ()
+            continue
         if r.status_code in (400, 413, 422):
             # 이 파일만의 문제다. 다른 트랙까지 멈추지 않는다
             raise RuntimeError(f"ElevenLabs 가 파일을 거부했습니다 {r.status_code}: {r.text[:200]}")
@@ -423,12 +441,12 @@ def with_retry(fn, retries=2):
             time.sleep(2 * attempt)
 
 
-def transcribe(audio):
+def transcribe(audio, keyterms=()):
     key = elevenlabs_key()
     blocks = []
     with tempfile.TemporaryDirectory() as folder:
         for path, offset in extract_chunks(audio, folder):
-            blocks += with_retry(lambda: transcribe_chunk(path, offset, key))
+            blocks += with_retry(lambda: transcribe_chunk(path, offset, key, keyterms))
     return blocks_to_rows(filter_hallucinations(blocks))
 
 
@@ -1141,7 +1159,7 @@ def make_subtitle(audio, source, source_lang, work, decode):
     if source:
         rows = parse_srt(decode(source.read_bytes()))
     else:
-        rows = transcribe(audio)
+        rows = transcribe(audio, keyterms_for(work))
         source_lang = guess_language(rows)
         original = audio.with_name(audio.stem + (".zh.srt" if source_lang == "Chinese" else ".ja.srt"))
         # 대사가 없어도 파일을 남긴다 — 뒤 단계가 실패해도 받아쓰기 요금이 또 나가지 않게
