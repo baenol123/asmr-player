@@ -42,7 +42,7 @@ except ImportError:
 
 BASE = Path(__file__).resolve().parent
 ELEVENLABS_URL = "https://api.elevenlabs.io/v1/speech-to-text"
-ELEVENLABS_MODEL = os.environ.get("ELEVENLABS_MODEL", "scribe_v2")
+ELEVENLABS_MODEL = os.environ.get("ELEVENLABS_MODEL", "scribe_v3")
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-6-luna")
 
