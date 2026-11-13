@@ -55,6 +55,7 @@ CONTEXT_WINDOW = 3     # 앞뒤 참고 줄 수
 MAX_REPEAT = 2         # 같은 문장 연속 반복 허용 횟수
 SPLIT_BUDGET = 40      # 파일당 재요청 상한 (요청 폭발 방지)
 MANUAL_MARKER = "[수동 번역 필요]"
+UNREFINED_SUFFIX = ".unrefined"   # 받아쓰기 후 AI 교정 전에 멈췄다는 빈 표시 파일
 HALLU_SUBSTR = (
     "ご視聴ありがとうございました", "ご視聴ありがとうございます", "チャンネル登録お願いします",
     "チャンネル登録、高評価お願いします", "次回もお楽しみに", "サブタイトル & コメント よろしくね",
@@ -540,6 +541,10 @@ def call_openai(prompt):
         if r.status_code == 429 and "insufficient_quota" not in r.text and attempt <= 3:
             time.sleep(30)
             continue
+        if r.status_code == 400 and not config_error(r):
+            # 이 배치 내용 때문에 거절된 것(invalid_prompt, 너무 긴 입력 등) — 나눠서 다시 보낸다.
+            # 키·설정 문제로 보고 한 시간씩 멈추면 같은 배치에서 매번 다시 막혀 다른 작품까지 멈춘다
+            raise RefusalError(f"OpenAI 가 이 묶음을 거절함: {r.text[:200]}")
         if r.status_code in (400, 401, 403, 404, 429):
             raise FatalApiError(f"OpenAI 오류 {r.status_code}: {r.text[:200]}")
         r.raise_for_status()
@@ -548,6 +553,17 @@ def call_openai(prompt):
         if message.get("refusal"):
             raise RefusalError("모델이 번역을 거부했습니다")
         return json.loads(message.get("content") or "")
+
+
+def config_error(r):
+    """400 응답이 모델 이름·매개변수 같은 설정 문제인지. 그렇다면 어느 배치를 보내도 똑같이 실패한다."""
+    try:
+        err = r.json().get("error") or {}
+    except ValueError:
+        return True
+    if err.get("code") == "context_length_exceeded":
+        return False
+    return bool(err.get("param"))
 
 
 def translate_batch(batch, opts, budget, retried=False):
@@ -561,13 +577,23 @@ def translate_batch(batch, opts, budget, retried=False):
                if t.get("id") in ids and isinstance(t.get("translation"), str) and t["translation"].strip()}
         # 교정은 '고칠 줄만 반환'이 정상이라 빠진 줄을 다시 묻지 않는다
         missing = [] if refine else [b for b in batch if b["id"] not in got]
-        if missing and len(missing) < len(batch) and budget["left"] > 0:
+        if missing and len(missing) == len(batch):
+            # 한 줄도 안 왔다(빈 목록, 엉뚱한 id) — 아래 except 에서 다시 보내거나 나눠 보낸다
+            raise ValueError("번역 결과가 비어 있음")
+        if missing and budget["left"] > 0:
             budget["left"] -= 1
             got.update(translate_batch(missing, opts, budget))
         return got
     except FatalApiError:
         raise
     except (requests.RequestException, RefusalError, ValueError, KeyError, IndexError, TypeError, AttributeError) as e:
+        if isinstance(e, requests.ConnectionError):
+            # 연결 끊김은 배치 문제가 아니다. 한 번 더 해 보고 그래도 안 되면 위로 올려 보낸다 —
+            # 여기서 실패 줄로 처리하면 '[수동 번역 필요]' 투성이 자막이 완성본으로 저장된다
+            if retried:
+                raise
+            time.sleep(5)
+            return translate_batch(batch, opts, budget, retried=True)
         if len(batch) <= 1:
             budget["failed"] += 1
             return {}
@@ -1158,21 +1184,29 @@ def source_for(track, audio, root):
 def make_subtitle(audio, source, source_lang, work, decode):
     """(결과 설명, 사용자에게 알릴 문제) 를 돌려준다."""
     problems = []
+    # 받아쓰기는 끝났는데 AI 교정은 아직이라는 표시. 오디오와 같은 이름이라 이름 번역 때 같이 옮겨진다
+    marker = audio.with_name(audio.stem + UNREFINED_SUFFIX)
     if source:
         rows = parse_srt(decode(source.read_bytes()))
+        refine = bool(rows) and marker.is_file()
     else:
         rows = transcribe(audio, keyterms_for(work))
         source_lang = guess_language(rows)
-        original = audio.with_name(audio.stem + (".zh.srt" if source_lang == "Chinese" else ".ja.srt"))
+        source = audio.with_name(audio.stem + (".zh.srt" if source_lang == "Chinese" else ".ja.srt"))
         # 대사가 없어도 파일을 남긴다 — 뒤 단계가 실패해도 받아쓰기 요금이 또 나가지 않게
-        write_srt(original, rows)
-        if rows:
+        write_srt(source, rows)
+        refine = bool(rows)
+        if refine:
+            # 교정 도중 키 오류·연결 끊김으로 멈추면, 다음에 이 표시를 보고 교정부터 다시 한다
+            marker.write_bytes(b"")
             if language_doubtful(rows):
                 problems.append("일본어·중국어가 아닌 언어로 인식됐습니다. 자막을 확인하세요")
-            rows, unrefined = refine_rows(rows, work, source_lang)
-            write_srt(original, rows)
-            if unrefined:
-                problems.append(f"AI 교정을 못 한 줄 {unrefined}개 (받아쓰기 원문 유지)")
+    if refine:
+        rows, unrefined = refine_rows(rows, work, source_lang)
+        write_srt(source, rows)
+        marker.unlink(missing_ok=True)
+        if unrefined:
+            problems.append(f"AI 교정을 못 한 줄 {unrefined}개 (받아쓰기 원문 유지)")
     if not rows:
         return "대사 없음", "대사를 찾지 못해 자막을 만들지 않았습니다"
     out, failed = translate_rows(rows, work, source_lang)

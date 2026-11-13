@@ -299,10 +299,18 @@ def scan_work_dir_uncached(folder):
             others.append((rel, "file"))
 
     tracks.sort(key=lambda r: (natural_key(str(r.parent)), natural_key(r.name)))
+    track_keys = {(str(r.parent).lower(), norm_stem(r.stem)) for r in tracks}
     out = []
     for rel in tracks:
         stem = norm_stem(rel.stem)
-        hit = subs.get((str(rel.parent).lower(), stem)) or subs.get(stem)
+        hit = subs.get((str(rel.parent).lower(), stem))
+        if not hit:
+            # 다른 폴더(자막 전용 폴더 등)의 같은 이름 자막. 단, 그 폴더에 같은 이름의 트랙이
+            # 따로 있으면 그 트랙의 자막이다 — disc1/01 의 자막을 disc2/01 에 붙이거나,
+            # SE 없는 판의 자막을 SE 있는 판에 시각도 안 맞춘 채 붙이지 않는다
+            hit = subs.get(stem)
+            if hit and (str(hit[1].parent).lower(), stem) in track_keys:
+                hit = None
         sub = hit[1] if hit else None
         try:
             size = (folder / rel).stat().st_size
