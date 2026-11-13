@@ -21,8 +21,10 @@ from flask import Blueprint, jsonify, request, send_from_directory
 bp = Blueprint("recommend", __name__)
 log = logging.getLogger(__name__)
 
+PER_PAGE = 100
 SEARCH = ("https://www.dlsite.com/maniax/fsr/ajax/=/language/jp/sex_category%5B0%5D/male"
-         "/work_category%5B0%5D/doujin/work_type_category%5B0%5D/audio/per_page/100/show_type/1")
+          "/work_category%5B0%5D/doujin/work_type_category%5B0%5D/audio"
+          f"/per_page/{PER_PAGE}/show_type/1")
 INFO = "https://www.dlsite.com/maniax/product/info/ajax?product_id={}&cdn_cache_min=1"
 WORK_URL = "https://www.dlsite.com/maniax/work/=/product_id/{}.html"
 ORDERS = {"dl": "dl_d", "new": "release_d", "old": "release"}
@@ -34,22 +36,27 @@ MAX_LIMIT = 300
 REQUEST_GAP = 0.5         # 캐시에 없는 DLsite 요청 사이 최소 간격(초)
 GENRE_LIST = "https://www.dlsite.com/maniax/genre/list"
 GENRE_LIST_SECONDS = 24 * 3600
-
-
-def _hit(rx, text):
-    return bool(rx and text and rx.search(text))
+GENRE_RETRY_SECONDS = 10 * 60   # 태그 목록 받기가 실패했을 때 다시 시도하기까지
+HANGUL = re.compile(r"[가-힣]")
 
 
 _paths = {}
 _session = None
 _session_lock = threading.Lock()
-_lock = threading.Lock()          # 저장 파일(들어봄·장르 번호) 읽고 쓰기
+# 저장 파일(들어봄·장르 번호) 읽고 쓰기. 읽기도 잠근다 — Windows 에서는 다른 스레드가 파일을
+# 열어 둔 사이에 바꿔치기(replace)하면 PermissionError 가 난다. 안에서 다시 잠글 수 있게 RLock
+_lock = threading.RLock()
 _cache_lock = threading.Lock()    # 메모리 캐시
 _net_lock = threading.Lock()      # 요청 간격 맞추기
+_library_lock = threading.Lock()  # 소장작 스캔은 한 번에 하나만
+_genre_list_lock = threading.Lock()  # 태그 목록 받기는 한 번에 하나만
 _last_request = 0.0
-_page_cache = {}   # url -> (time, rows)
+_page_cache = {}   # url -> (time, (rows, total))
 _info_cache = {}   # id -> (time, info)    실패한 요청은 넣지 않는다
 _library = (0.0, None)
+_genres = None         # 이름 -> 장르 번호 (dlsite_genres.json 의 메모리 사본)
+_genre_list = None     # {"at": 받은 시각, "names": [공식 한국어 이름]} (dlsite_genre_list.json)
+_genre_list_try = 0.0  # 태그 목록을 마지막으로 받으려 한 시각 (실패 포함)
 _MISS = object()
 
 
@@ -99,6 +106,11 @@ def _cache_put(cache, key, value):
         if len(cache) > CACHE_MAX:
             for k in [k for k, (t, _) in cache.items() if now - t >= CACHE_SECONDS]:
                 del cache[k]
+            # 전부 아직 유효하면 오래된 것부터 지운다. 여유를 남겨 두어
+            # 저장할 때마다 캐시 전체를 훑지 않게 한다
+            if len(cache) > CACHE_MAX * 0.9:
+                for k in sorted(cache, key=lambda k: cache[k][0])[:len(cache) - int(CACHE_MAX * 0.8)]:
+                    del cache[k]
 
 
 # ── 입력값 다듬기 ────────────────────────────────────────────────────
@@ -121,11 +133,17 @@ def _float(v, default=None):
         return default
 
 
+def _str(v):
+    return v if isinstance(v, str) else ""
+
+
 def _tag_list(v):
     if isinstance(v, str):
         v = [v]
+    if not isinstance(v, (list, tuple)):
+        return []
     out = []
-    for t in v or []:
+    for t in v:
         t = t.strip() if isinstance(t, str) else ""
         if t and t not in out:
             out.append(t)
@@ -134,19 +152,31 @@ def _tag_list(v):
 
 # ── 저장 파일 ────────────────────────────────────────────────────────
 def _json_file(name, default):
+    """없거나 깨진 파일은 기본값. 읽기 권한 오류 같은 건 그대로 올려 보낸다 —
+    빈 값으로 넘어가면 들어봄 목록을 저장할 때 기존 기록을 지워 버린다."""
     f = _paths["cache"] / name
-    try:
-        return json.loads(f.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return default
+    with _lock:
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
+            return default
+    return data if isinstance(data, type(default)) else default
 
 
 def _save_json(name, data):
     f = _paths["cache"] / name
-    f.parent.mkdir(parents=True, exist_ok=True)
-    tmp = f.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(f)
+    with _lock:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        tmp = f.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        for i in range(5):
+            try:
+                tmp.replace(f)
+                return
+            except PermissionError:   # 백신·탐색기 같은 다른 프로그램이 잠깐 열어 둔 경우
+                if i == 4:
+                    raise
+                time.sleep(0.1)
 
 
 def seen_list():
@@ -154,40 +184,75 @@ def seen_list():
 
 
 def genre_ids():
-    return _json_file("dlsite_genres.json", {})
+    global _genres
+    with _lock:
+        if _genres is None:
+            _genres = _json_file("dlsite_genres.json", {})
+        return dict(_genres)
 
 
 def _learn_genres(learned):
+    global _genres
     with _lock:
         known = genre_ids()
         if any(known.get(k) != v for k, v in learned.items()):
             known.update(learned)
             _save_json("dlsite_genres.json", known)
+            _genres = known
 
 
-_genre_list_at = 0.0
+def _genre_list_meta():
+    global _genre_list
+    with _lock:
+        if _genre_list is None:
+            _genre_list = _json_file("dlsite_genre_list.json", {})
+        return _genre_list
 
 
 def ensure_genre_list():
-    """DLsite 전체 태그 목록(이름 -> 번호)을 하루 한 번 받아 둔다.
+    """DLsite 전체 태그 목록(이름 -> 번호)을 하루 한 번 받아 둔다. 실패하면 10분 뒤에 다시 시도한다.
     소장작 정보에만 있는 옛 태그 이름(DLsite 에서 이름이 바뀐 것)은 여기에 없다."""
-    global _genre_list_at
-    f = _paths["cache"] / "dlsite_genres.json"
-    try:
-        fresh = time.time() - f.stat().st_mtime < GENRE_LIST_SECONDS
-    except OSError:
-        fresh = False
-    if _genre_list_at and (fresh or time.time() - _genre_list_at < GENRE_LIST_SECONDS):
-        return
-    try:
-        page = _get(GENRE_LIST).text
-    except requests.RequestException as e:
-        log.warning("recommend: 태그 목록을 받지 못함: %s", e)
-        return
-    found = {_text(n): g for g, n in re.findall(r'/genre/=/genre/(\d+)"[^>]*>([^<]+)<span', page)}
-    if found:
+    global _genre_list, _genre_list_try
+    with _genre_list_lock:   # 동시에 들어온 요청은 앞 요청이 받은 결과를 쓴다
+        now = time.time()
+        if now - _float(_genre_list_meta().get("at"), 0.0) < GENRE_LIST_SECONDS:
+            return
+        if now - _genre_list_try < GENRE_RETRY_SECONDS:
+            return
+        _genre_list_try = now
+        try:
+            page = _get(GENRE_LIST).text
+        except requests.RequestException as e:
+            log.warning("recommend: 태그 목록을 받지 못함: %s", e)
+            return
+        found = {_text(n): g for g, n in re.findall(r'/genre/=/genre/(\d+)"[^>]*>([^<]+)<span', page)}
+        if not found:
+            log.warning("recommend: 태그 목록 페이지에서 태그를 찾지 못함 (DLsite 화면 구조가 바뀌었을 수 있음)")
+            return
         _learn_genres(found)
-        _genre_list_at = time.time()
+        meta = {"at": time.time(), "names": sorted(found)}
+        with _lock:
+            _save_json("dlsite_genre_list.json", meta)
+            _genre_list = meta
+
+
+def preferred_names(known, lib_tags):
+    """장르 번호 -> 보여줄 이름 하나.
+
+    같은 번호에 이름이 여러 개 쌓여 있다 — 검색 결과 일부는 일본어 이름으로 오고(添い寝),
+    DLsite 가 이름을 바꾸면 옛 이름(귀햝기)도 남는다. 소장작 태그와 같은 이름 → 한글 이름 →
+    공식 태그 목록의 이름 순으로 고른다. 소장작과 이름이 맞아야 취향 점수가 붙는다.
+    공식 목록(한국어 설정)에도 최근 태그 일부는 일본어로 나와서 한글 여부를 먼저 본다."""
+    official = set(_genre_list_meta().get("names") or [])
+
+    def rank(n):
+        return (n in lib_tags, bool(HANGUL.search(n)), n in official, n)
+
+    best = {}
+    for n, g in known.items():
+        if g not in best or rank(n) > rank(best[g]):
+            best[g] = n
+    return best
 
 
 # ── 소장작과 취향 ────────────────────────────────────────────────────
@@ -232,11 +297,13 @@ def _scan_library():
 def library(fresh=False):
     """소장작 스캔은 매 요청마다 할 필요가 없어 잠깐 재사용한다."""
     global _library
-    t, lib = _library
-    if fresh or lib is None or time.time() - t >= LIBRARY_SECONDS:
-        lib = _scan_library()
-        _library = (time.time(), lib)
-    return lib
+    with _library_lock:   # 동시에 들어온 요청은 앞 요청의 스캔 결과를 쓴다
+        t, lib = _library
+        age = time.time() - t
+        if lib is None or age >= LIBRARY_SECONDS or (fresh and age >= 2):
+            lib = _scan_library()
+            _library = (time.time(), lib)
+        return lib
 
 
 # ── DLsite 검색 결과 읽기 ────────────────────────────────────────────
@@ -295,16 +362,20 @@ def parse_rows(page):
 
 
 def fetch_page(url):
+    """돌려주는 값: (작품 목록, DLsite 가 알려 준 전체 결과 수 또는 None)."""
     hit = _cache_get(_page_cache, url)
     if hit is not _MISS:
         return hit
     data = _get(url).json()
-    page = data.get("search_result") if isinstance(data, dict) else None
-    rows, learned = parse_rows(page or "")
+    if not isinstance(data, dict):
+        data = {}
+    rows, learned = parse_rows(_str(data.get("search_result")))
+    info = data.get("page_info")
+    total = _int(info.get("count"), None, 0) if isinstance(info, dict) else None
     if learned:
         _learn_genres(learned)
-    _cache_put(_page_cache, url, rows)
-    return rows
+    _cache_put(_page_cache, url, (rows, total))
+    return rows, total
 
 
 def fetch_info(ids):
@@ -343,16 +414,21 @@ def search_url(include_ids, keyword, order, page, any_tag=False):
         path += "/genre_and_or/" + ("or" if any_tag else "and")
     if keyword:
         path += "/keyword/" + quote(keyword, safe="")
-    path += f"/order%5B0%5D/{ORDERS.get(order, 'dl_d')}"
+    path += f"/order%5B0%5D/{ORDERS.get(_str(order), 'dl_d')}"
     if page > 1:
         path += f"/page/{page}"
     return path
 
 
 # ── 추천 ─────────────────────────────────────────────────────────────
-def full_tags(work, names):
-    """보이는 태그 + 숨은 장르 번호를 이름으로 바꾼 것."""
-    tags = list(work["tags"])
+def full_tags(work, names, known):
+    """보이는 태그 + 숨은 장르 번호를 이름으로 바꾼 것. 보이는 태그도 고른 이름으로 맞춘다."""
+    tags = []
+    for t in work["tags"]:
+        g = known.get(t)
+        n = names.get(g, t) if g else t
+        if n not in tags:
+            tags.append(n)
     for g in work["gids"]:
         n = names.get(g)
         if n and n not in tags:
@@ -413,6 +489,8 @@ def _health_warnings(pool):
 
 
 def recommend(opts):
+    if not isinstance(opts, dict):
+        opts = {}
     lib = library()
     seen = seen_list()
     include = _tag_list(opts.get("include"))
@@ -429,26 +507,33 @@ def recommend(opts):
                 errors.append(f"태그 번호 확인 {p}쪽: {e}")
                 break
         known = genre_ids()
-    names = {g: n for n, g in known.items()}
+    names = preferred_names(known, lib["tags"])
     include_ids = [known[t] for t in include if t in known]
     any_tag = opts.get("include_mode") == "any"   # 포함 태그를 하나 이상만 가져도 되는지
+    unknown_inc = [t for t in include if t not in known]
+    if any_tag and include_ids and unknown_inc:
+        # 번호를 모르는 태그는 검색 조건에 넣을 수 없다. 'A 또는 B' 에서 B 만 붙은 작품은 후보에 없다
+        errors.append(f"'{', '.join(unknown_inc)}' 태그는 DLsite 에서 검색할 수 없어서, "
+                      f"나머지 포함 태그로 찾은 작품만 보여줍니다.")
     pages = _int(opts.get("pages"), 3, 1, MAX_PAGES)
-    keyword = (opts.get("keyword") or "").strip() if isinstance(opts.get("keyword"), str) else ""
+    keyword = _str(opts.get("keyword")).strip()
 
     pool = {}
     for p in range(1, pages + 1):
         try:
-            rows = fetch_page(search_url(include_ids, keyword, opts.get("order"), p, any_tag))
+            rows, total = fetch_page(search_url(include_ids, keyword, opts.get("order"), p, any_tag))
         except (requests.RequestException, ValueError) as e:
             errors.append(f"{p}쪽: {e}")
             break
         for r in rows:
             pool.setdefault(r["id"], r)
-        if len(rows) < 100:
+        # 읽어 낸 줄 수가 아니라 DLsite 가 알려 준 전체 수로 끝을 판단한다.
+        # 몇 줄을 못 읽었다고 다음 쪽을 건너뛰지 않게
+        if not rows or (total is not None and p * PER_PAGE >= total):
             break
     errors += _health_warnings(pool)
 
-    cv_mode = str(opts.get("cv") or "any")
+    cv_mode = _str(opts.get("cv")) or "any"
     year_from = _int(opts.get("year_from"), 0)
     year_to = _int(opts.get("year_to"), 9999)
     if year_from > year_to:
@@ -492,14 +577,14 @@ def recommend(opts):
             counts["평점 정보 실패"] += 1; continue
         if rate_min and (rate is None or rate < rate_min):
             counts["평점"] += 1; continue
-        w = {**w, "tags": full_tags(w, names)}
+        w = {**w, "tags": full_tags(w, names, known)}
         score, reasons, score_parts = taste_score(w, lib)
         out.append({**w, "rate": rate, "rate_count": _int(i.get("rate_count"), 0),
                     "dl": _int(i.get("dl_count"), 0) or w["dl"], "score": score, "score_parts": score_parts, "reasons": reasons,
                     "seen": w["id"] in seen, "owned": w["id"] in lib["owned"],
                     "url": WORK_URL.format(w["id"])})
 
-    sort = opts.get("sort") or "taste"
+    sort = _str(opts.get("sort")) or "taste"
     keys = {
         "taste": lambda w: (-w["score"], -(w["rate"] or 0)),
         "dl": lambda w: -w["dl"],
@@ -531,7 +616,8 @@ def tags():
     for t, c in lib["tags"].most_common():
         # DLsite 에 없는 옛 태그 이름은 검색할 수 없다 — 버튼 대신 안내로 보여준다
         (mine if t in known else old).append([t, c])
-    others = sorted(t for t in known if t not in lib["tags"])
+    # 같은 태그의 일본어·옛 이름은 빼고 번호마다 이름 하나만
+    others = sorted(n for n in set(preferred_names(known, lib["tags"]).values()) if n not in lib["tags"])
     return jsonify(library=mine, old=old, others=others, count=lib["count"], missing_meta=lib["missing"])
 
 
@@ -549,8 +635,10 @@ def seen():
     with _lock:
         data = seen_list()
         if request.method == "POST":
-            body = request.get_json(silent=True) or {}
-            wid = str(body.get("id") or "").strip().upper()
+            body = request.get_json(silent=True)
+            if not isinstance(body, dict):
+                body = {}
+            wid = _str(body.get("id")).strip().upper()
             if re.fullmatch(r"[A-Z]{2}\d{6,8}", wid):
                 data[wid] = {"title": str(body.get("title") or "")[:200], "at": time.time()}
                 _save_json("recommend_seen.json", data)
