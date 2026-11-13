@@ -55,6 +55,13 @@ RETRY_AFTER_NOTFOUND = 30 * 86400
 app = Flask(__name__, static_folder=str(BASE / "static"), static_url_path="/static")
 app.json.ensure_ascii = False   # 한글을 \uXXXX 로 늘리지 않는다
 
+try:   # 작품 추천 페이지(/recommend). 파일이 없으면 기능만 빠진다
+    import recommend
+    recommend.init(WORKS_DIR, META_DIR, CACHE_DIR)
+    app.register_blueprint(recommend.bp)
+except ImportError:
+    recommend = None
+
 for d in (WORKS_DIR, META_DIR, COVER_DIR):
     d.mkdir(parents=True, exist_ok=True)
 

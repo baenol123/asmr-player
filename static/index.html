@@ -69,7 +69,7 @@ button { font: inherit; color: inherit; background: none; border: none; padding:
   background: none; color: var(--fg-dim); border: none;
   font-size: 12px; padding: 4px 0; outline: none; text-align: right;
 }
-#favbtn, #setbtn { color: var(--fg-dim); width: 36px; height: 36px; }
+#favbtn, #setbtn, #recbtn { color: var(--fg-dim); width: 36px; height: 36px; }
 #favbtn.on { color: var(--accent); }
 #favbtn.on svg { fill: currentColor; }
 #setbtn.on { color: var(--fg); }
@@ -369,7 +369,7 @@ body.immersive #p-cue { flex: 1; max-height: none; line-height: 1.7; }
 .cue-line.cur, .cue-line.prev { background: var(--bg3); color: var(--cue-color, var(--fg)); }
 #tr-follow {
   position: absolute; left: 50%; bottom: calc(18px + var(--safe-b)); transform: translateX(-50%);
-  display: none; padding: 9px 16px; border-radius: 999px; font-size: 13px;
+  display: none; padding: 8px 16px; border-radius: 999px; font-size: 13px;
   background: var(--fg); color: var(--bg); box-shadow: 0 4px 16px rgba(0,0,0,.35);
 }
 #tr-follow.show { display: block; }
@@ -427,6 +427,7 @@ body.immersive #p-cue { flex: 1; max-height: none; line-height: 1.7; }
 <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
 <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
 <symbol id="i-arrow-left" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></symbol>
+<symbol id="i-compass" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m16.24 7.76-2.12 6.36-6.36 2.12 2.12-6.36 6.36-2.12z"/></symbol>
 <symbol id="i-heart" viewBox="0 0 24 24"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></symbol>
 <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></symbol>
 <symbol id="i-maximize" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></symbol>
@@ -442,6 +443,7 @@ body.immersive #p-cue { flex: 1; max-height: none; line-height: 1.7; }
 <div id="header">
   <div class="row">
     <h1>ASMR 라이브러리</h1>
+    <a id="recbtn" href="/recommend" title="작품 추천" style="display:inline-flex;align-items:center;justify-content:center"><svg class="i"><use href="#i-compass"/></svg></a>
     <button id="favbtn" title="즐겨찾기만 보기"><svg class="i"><use href="#i-heart"/></svg></button>
     <button id="setbtn" title="설정"><svg class="i"><use href="#i-sliders"/></svg></button>
   </div>

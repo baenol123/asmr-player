@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#141415">
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<title>작품 추천</title>
+<script>
+try { const t = localStorage.getItem("theme"); if (t && t !== "dark") document.documentElement.setAttribute("data-theme", t); } catch (e) {}
+</script>
+<style>
+@font-face{font-family:"Pretendard";font-weight:400;src:url(/static/fonts/Pretendard-Regular.subset.woff2) format("woff2");font-display:swap}@font-face{font-family:"Pretendard";font-weight:500;src:url(/static/fonts/Pretendard-Medium.subset.woff2) format("woff2");font-display:swap}@font-face{font-family:"Pretendard";font-weight:600;src:url(/static/fonts/Pretendard-SemiBold.subset.woff2) format("woff2");font-display:swap}
+/* 라이브러리와 같은 graphite 톤. 강조색(분홍)은 '포함' 태그와 '소장' 표시에만 쓴다 */
+:root {
+  --bg: #141415; --bg2: #19191b; --bg3: #232325;
+  --fg: #ededed; --fg-dim: #a1a1a6; --dim3: #85858b;
+  --accent: #e29ab0; --neg: #e5484d;
+  --line: rgba(237,237,237,.08);
+  --ease: cubic-bezier(0.22,1,0.36,1);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+}
+:root[data-theme="black"] { --bg: #000; --bg2: #000; --bg3: #101013; --line: rgba(255,255,255,.1); }
+:root[data-theme="light"] {
+  --bg: #fafaf9; --bg2: #ffffff; --bg3: #f0f0ee;
+  --fg: #1a1a1b; --fg-dim: #5f5f64; --dim3: #737378; --accent: #b4506d; --neg: #dc2626;
+  --line: rgba(26,26,27,.09);
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.5 "Pretendard", "Malgun Gothic", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased; padding-bottom: calc(32px + var(--safe-b)); }
+button, input, select { font: inherit; color: inherit; }
+button { background: none; border: none; padding: 0; cursor: pointer; }
+button:focus-visible, select:focus-visible, input:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid var(--fg-dim); outline-offset: 2px; }
+a { color: inherit; }
+svg.i { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.wrap { max-width: 820px; margin: 0 auto; padding: 0 16px; }
+
+header { position: sticky; top: 0; z-index: 5; background: var(--bg); border-bottom: 1px solid var(--line);
+  padding: calc(12px + env(safe-area-inset-top, 0px)) 0 12px; }
+header .wrap { display: flex; align-items: center; gap: 12px; }
+header h1 { flex: 1; font-size: 18px; font-weight: 600; margin: 0; }
+header a { display: inline-flex; align-items: center; gap: 4px; text-decoration: none; color: var(--fg-dim); font-size: 13px; transition: color 150ms var(--ease); }
+header a:hover { color: var(--fg); }
+
+section { margin-top: 16px; }
+.hint { font-size: 12px; color: var(--dim3); margin: 8px 0 0; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid transparent; background: var(--bg3);
+  border-radius: 6px; padding: 4px 8px; font-size: 13px; color: var(--fg-dim);
+  transition: color 150ms var(--ease), border-color 150ms var(--ease); }
+.chip:hover { color: var(--fg); }
+.chip i { font-style: normal; font-size: 12px; color: var(--dim3); font-variant-numeric: tabular-nums; }
+.chip svg.i { width: 12px; height: 12px; stroke-width: 2; }
+.chip.inc { border-color: var(--accent); color: var(--accent); }
+.chip.exc { border-color: var(--neg); color: var(--neg); text-decoration: line-through; }
+.mode { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin-bottom: 12px; }
+label.f.inline { flex-direction: row; align-items: center; gap: 8px; }
+label.f.inline select { width: auto; padding: 4px 8px; }
+.more { font-size: 12px; color: var(--fg-dim); text-decoration: underline; margin-top: 8px; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(152px, 1fr)); gap: 12px; }
+label.f { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--fg-dim); }
+.f input, .f select, #tag-add { background: var(--bg3); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; width: 100%; min-width: 0; }
+#tag-add { margin-top: 12px; }
+.pair { display: flex; gap: 8px; align-items: center; }
+.checks { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 12px; font-size: 13px; color: var(--fg-dim); }
+.checks label { display: flex; align-items: center; gap: 8px; }
+
+#go { margin-top: 16px; width: 100%; height: 48px; border-radius: 10px; background: var(--fg); color: var(--bg); font-weight: 600; font-size: 15px;
+  transition: opacity 150ms var(--ease), transform 150ms var(--ease); }
+#go:active { transform: scale(.98); }
+#go:disabled { opacity: .5; }
+#status { margin-top: 12px; font-size: 12px; color: var(--fg-dim); min-height: 16px; font-variant-numeric: tabular-nums; }
+#status.err { color: var(--neg); }
+
+.card { display: grid; grid-template-columns: 96px 1fr; gap: 12px; padding: 16px 0; border-top: 1px solid var(--line); }
+.card img { width: 96px; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 8px; background: var(--bg3); }
+.card .t { font-weight: 500; font-size: 14px; line-height: 1.4; text-decoration: none; display: block; overflow-wrap: anywhere; }
+.card .m { font-size: 12px; color: var(--fg-dim); margin-top: 4px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.card .score { font-size: 12px; color: var(--fg-dim); margin-top: 4px; font-variant-numeric: tabular-nums; }
+.card .score b { font-weight: 600; color: var(--fg); }
+.card .score span { color: var(--dim3); }
+.card .why { font-size: 12px; color: var(--fg-dim); margin-top: 4px; }
+.card .tg { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.card .tg span { font-size: 11px; padding: 2px 6px; border-radius: 4px; background: var(--bg3); color: var(--dim3); }
+.card .tg span.mine { color: var(--fg-dim); }
+.card .act { display: flex; gap: 16px; margin-top: 8px; font-size: 12px; }
+.card .act button, .card .act a { color: var(--fg-dim); text-decoration: underline; transition: color 150ms var(--ease); }
+.card .act button:hover, .card .act a:hover { color: var(--fg); }
+.card.seen { opacity: .45; }
+.card .own { font-size: 11px; padding: 0 6px; border-radius: 4px; border: 1px solid var(--accent); color: var(--accent); margin-right: 6px; vertical-align: 1px; }
+
+#seen-list div { display: flex; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 12px; color: var(--fg-dim); }
+#seen-list div span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#seen-list button { text-decoration: underline; color: var(--fg-dim); }
+details summary { cursor: pointer; font-size: 13px; color: var(--fg-dim); }
+/* 접고 펼치는 영역 */
+details.panel { margin-top: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg2); }
+details.panel > summary { list-style: none; display: flex; align-items: center; gap: 8px; padding: 12px 16px;
+  font-size: 14px; font-weight: 500; color: var(--fg); }
+details.panel > summary::-webkit-details-marker { display: none; }
+details.panel > summary .chev { margin-left: auto; color: var(--dim3); transition: transform 180ms var(--ease); }
+details.panel:not([open]) > summary .chev { transform: rotate(-90deg); }
+details.panel > summary .sum { font-size: 12px; font-weight: 400; color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+details.panel[open] > summary .sum { display: none; }
+details.panel .body { padding: 0 16px 16px; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+<symbol id="i-arrow-left" viewBox="0 0 24 24"><path d="m12 19-7-7 7-7"/><path d="M19 12H5"/></symbol>
+<symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+</svg>
+<header><div class="wrap"><h1>작품 추천</h1><a href="/"><svg class="i"><use href="#i-arrow-left"/></svg>라이브러리</a></div></header>
+
+<main class="wrap">
+  <details class="panel" id="p-tags" open>
+    <summary>태그 <span class="sum" id="sum-tags"></span><svg class="i chev"><use href="#i-chevron-down"/></svg></summary>
+    <div class="body">
+    <div class="mode">
+      <p class="hint" style="margin:0">한 번 누르면 포함, 두 번 누르면 제외, 세 번 누르면 해제</p>
+      <label class="f inline">포함 태그
+        <select id="include_mode"><option value="all">모두 있는 작품</option><option value="any">하나 이상 있는 작품</option></select></label>
+    </div>
+    <div class="chips" id="tags"></div>
+    <button class="more" id="more">태그 더 보기</button>
+    <div><input id="tag-add" list="tag-options" placeholder="다른 태그 추가 (예: 발로, 하렘)"></div>
+    <datalist id="tag-options"></datalist>
+    <p class="hint">숫자는 그 태그가 붙은 소장작 수입니다.</p>
+    <p class="hint" id="old-tags"></p>
+    </div>
+  </details>
+
+  <details class="panel" id="p-cond" open>
+    <summary>조건 <span class="sum" id="sum-cond"></span><svg class="i chev"><use href="#i-chevron-down"/></svg></summary>
+    <div class="body">
+    <div class="grid">
+      <label class="f">키워드<input id="keyword" placeholder="제목·내용 검색"></label>
+      <label class="f">성우 수
+        <select id="cv"><option value="any">상관없음</option><option value="1">1명</option><option value="2">2명 이상</option></select></label>
+      <label class="f">출시 연도
+        <span class="pair"><input id="year_from" type="number" inputmode="numeric" placeholder="부터"><input id="year_to" type="number" inputmode="numeric" placeholder="까지"></span></label>
+      <label class="f">최대 가격 (엔)<input id="price_max" type="number" inputmode="numeric" placeholder="제한 없음"></label>
+      <label class="f">최소 평점
+        <select id="rate_min"><option value="">상관없음</option><option>4.5</option><option>4.7</option><option>4.8</option></select></label>
+      <label class="f">정렬
+        <select id="sort"><option value="taste">취향순</option><option value="dl">판매순</option><option value="rate">평점순</option><option value="new">최신순</option><option value="old">오래된순</option></select></label>
+      <label class="f">검색할 대상
+        <select id="order"><option value="dl">많이 팔린 작품</option><option value="new">최근 작품</option><option value="old">오래된 작품</option></select></label>
+      <label class="f">검색 범위
+        <select id="pages"><option value="1">100개</option><option value="3" selected>300개</option><option value="5">500개</option></select></label>
+    </div>
+    <div class="checks">
+      <label><input type="checkbox" id="all_ages"> 전연령 포함</label>
+      <label><input type="checkbox" id="show_seen"> 들어본 작품도 표시</label>
+      <label><input type="checkbox" id="hide_owned" checked> 라이브러리에 있는 작품 빼기</label>
+    </div>
+    </div>
+  </details>
+
+  <section>
+    <button id="go">추천 받기</button>
+    <div id="status"></div>
+    <p class="hint">미성년으로 보이는 설정의 작품은 조건과 상관없이 항상 빠집니다.</p>
+  </section>
+
+  <section id="results"></section>
+
+  <section>
+    <details><summary>들어봄으로 표시한 작품 <span id="seen-n"></span></summary><div id="seen-list"></div></details>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const FIELDS = ["include_mode", "keyword", "cv", "year_from", "year_to", "price_max", "rate_min", "sort", "order", "pages"];
+const CHECKS = ["all_ages", "show_seen", "hide_owned"];
+let state = { tags: {}, fields: {}, checks: {} };   // tags: 이름 -> "inc" | "exc"
+try { state = Object.assign(state, JSON.parse(localStorage.getItem("recommend") || "{}")); } catch (e) {}
+const save = () => { try { localStorage.setItem("recommend", JSON.stringify(state)); } catch (e) {} };
+
+let libTags = [], showAll = false;
+const libCount = {};
+
+function renderTags() {
+  const shown = showAll ? libTags : libTags.slice(0, 30);
+  const names = shown.map(t => t[0]);
+  for (const t of Object.keys(state.tags)) if (!names.includes(t)) names.push(t);   // 직접 추가한 태그
+  $("tags").innerHTML = names.map(t =>
+    `<button class="chip ${state.tags[t] || ""}" data-t="${esc(t)}">${state.tags[t] ? `<svg class="i"><use href="#i-${state.tags[t] === "inc" ? "plus" : "minus"}"/></svg>` : ""}${esc(t)}${libCount[t] ? `<i>${libCount[t]}</i>` : ""}</button>`).join("");
+  $("tags").querySelectorAll(".chip").forEach(b => b.onclick = () => {
+    const t = b.dataset.t, cur = state.tags[t];
+    if (!cur) state.tags[t] = "inc"; else if (cur === "inc") state.tags[t] = "exc"; else delete state.tags[t];
+    save(); renderTags(); summarize();
+  });
+  $("more").textContent = showAll ? "접기" : `태그 더 보기 (${libTags.length})`;
+}
+$("more").onclick = () => { showAll = !showAll; renderTags(); };
+$("tag-add").onchange = () => {
+  const t = $("tag-add").value.trim();
+  if (t) { state.tags[t] = state.tags[t] || "inc"; save(); renderTags(); summarize(); }
+  $("tag-add").value = "";
+};
+
+for (const f of FIELDS) {
+  if (state.fields[f] !== undefined) $(f).value = state.fields[f];
+  $(f).onchange = () => { state.fields[f] = $(f).value; save(); };
+}
+for (const c of CHECKS) {
+  if (c in state.checks) $(c).checked = !!state.checks[c];
+  $(c).onchange = () => { state.checks[c] = $(c).checked; save(); summarize(); };
+}
+for (const f of FIELDS) $(f).addEventListener("change", summarize);
+
+// 접힌 상태에서도 무엇을 골랐는지 보이게 한 줄로 요약한다
+function summarize() {
+  const tags = Object.entries(state.tags).map(([t, v]) => (v === "inc" ? "+" : "−") + t);
+  const incCount = Object.values(state.tags).filter(v => v === "inc").length;
+  $("sum-tags").textContent = (tags.join(" ") || "선택 없음")
+    + ($("include_mode").value === "any" && incCount > 1 ? " · 포함은 하나 이상" : "");
+  const sel = id => $(id).options[$(id).selectedIndex].text;
+  const parts = [];
+  if ($("keyword").value) parts.push(`"${$("keyword").value}"`);
+  if ($("cv").value !== "any") parts.push("성우 " + sel("cv"));
+  if ($("year_from").value || $("year_to").value) parts.push(`${$("year_from").value}~${$("year_to").value}년`);
+  if ($("price_max").value) parts.push(`${$("price_max").value}엔 이하`);
+  if ($("rate_min").value) parts.push("평점 " + $("rate_min").value + " 이상");
+  parts.push(sel("sort"), sel("order") + " " + sel("pages"));
+  if (!$("hide_owned").checked) parts.push("소장작 포함");
+  $("sum-cond").textContent = parts.join(" · ");
+}
+// 펼침 상태 기억
+for (const id of ["p-tags", "p-cond"]) {
+  if (state.open && id in state.open) $(id).open = state.open[id];
+  $(id).addEventListener("toggle", () => { state.open = { ...(state.open || {}), [id]: $(id).open }; save(); });
+}
+summarize();
+
+fetch("/api/recommend/tags").then(r => r.json()).then(d => {
+  libTags = d.library;
+  libTags.forEach(([t, n]) => libCount[t] = n);
+  $("tag-options").innerHTML = [...libTags.map(t => t[0]), ...d.others].map(t => `<option value="${esc(t)}">`).join("");
+  renderTags();
+  if (d.old?.length) $("old-tags").textContent =
+    `DLsite에서 이름이 바뀐 옛 태그 ${d.old.length}개는 검색할 수 없어 뺐습니다: ${d.old.map(t => t[0]).join(", ")}`;
+});
+
+const FILTER_NAMES = ["소장", "들어봄", "미성년 설정", "전연령", "포함 태그 없음", "제외 태그", "성우 수", "출시 연도", "가격", "평점"];
+
+$("go").onclick = async () => {
+  const body = { include: [], exclude: [], adult_only: !$("all_ages").checked, show_seen: $("show_seen").checked,
+                 hide_owned: $("hide_owned").checked };
+  for (const [t, v] of Object.entries(state.tags)) (v === "inc" ? body.include : body.exclude).push(t);
+  for (const f of FIELDS) body[f] = $(f).value;
+  $("go").disabled = true; $("status").className = ""; $("status").textContent = "DLsite에서 찾는 중…";
+  try {
+    const r = await fetch("/api/recommend", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || r.status);
+    render(d);
+    // 결과를 바로 보도록 설정 영역을 접는다
+    $("p-tags").open = $("p-cond").open = false;
+    $("results").scrollIntoView({ block: "start", behavior: "smooth" });
+  } catch (e) {
+    $("status").className = "err"; $("status").textContent = "실패: " + e.message;
+  } finally { $("go").disabled = false; }
+};
+
+// 점수 내역: 0 인 항목은 빼고 '태그 26.1 + 서클 3.6' 처럼 보여준다
+function scoreParts(p) {
+  if (!p) return "";
+  const names = { tag: "태그", circle: "서클", cv: "성우" };
+  const items = Object.keys(names).filter(k => p[k] > 0).map(k => `${names[k]} ${p[k].toFixed(1)}`);
+  return items.length > 1 ? ` <span>(${items.join(" + ")})</span>` : "";
+}
+
+function render(d) {
+  const f = d.filtered || {};
+  const parts = FILTER_NAMES.filter(k => f[k]).map(k => `${k} ${f[k]}`);
+  $("status").textContent = `${d.pool}개 중 ${d.matched}개가 조건에 맞습니다` + (parts.length ? ` · 제외: ${parts.join(", ")}` : "")
+    + (d.unknown_tags?.length ? ` · DLsite에서 못 찾은 태그: ${d.unknown_tags.join(", ")}` : "")
+    + (d.errors?.length ? ` · 일부 실패: ${d.errors.join("; ")}` : "");
+  const inc = new Set(Object.keys(state.tags).filter(t => state.tags[t] === "inc"));
+  $("results").innerHTML = d.works.map(w => `
+    <div class="card ${w.seen ? "seen" : ""}" data-id="${w.id}">
+      <a href="${w.url}" target="_blank" rel="noopener"><img loading="lazy" src="${esc(w.thumb || "")}" alt=""></a>
+      <div>
+        <a class="t" href="${w.url}" target="_blank" rel="noopener">${w.owned ? `<span class="own">소장</span>` : ""}${esc(w.title)}</a>
+        <div class="m">${esc(w.id)} · ${esc(w.circle || "")}${w.cvs.length ? " / " + esc(w.cvs.join(", ")) : ""}</div>
+        <div class="m">${esc(w.date)} · ${w.price != null ? w.price.toLocaleString() + "엔" : ""}${w.rate ? ` · 평점 ${w.rate} (${w.rate_count.toLocaleString()}명)` : ""} · 판매 ${w.dl.toLocaleString()}</div>
+        <div class="score">추천 점수 <b>${w.score.toFixed(1)}</b>${scoreParts(w.score_parts)}</div>
+        ${w.reasons.length ? `<div class="why">${esc(w.reasons.join(" · "))}</div>` : ""}
+        <div class="tg">${w.tags.map(t => `<span class="${libCount[t] || inc.has(t) ? "mine" : ""}">${esc(t)}</span>`).join("")}</div>
+        <div class="act">
+          <button data-seen="${w.id}" data-title="${esc(w.title)}">${w.seen ? "들어봄 취소" : "들어봄"}</button>
+          <a href="${w.url}" target="_blank" rel="noopener">DLsite</a>
+        </div>
+      </div>
+    </div>`).join("") || `<p class="hint">조건에 맞는 작품이 없습니다. 검색 범위를 넓히거나 조건을 줄여 보세요.</p>`;
+  $("results").querySelectorAll("[data-seen]").forEach(b => b.onclick = async () => {
+    const card = b.closest(".card"), on = !card.classList.contains("seen");
+    await markSeen(b.dataset.seen, b.dataset.title, on);
+    if (on && !$("show_seen").checked) card.remove();
+    else { card.classList.toggle("seen", on); b.textContent = on ? "들어봄 취소" : "들어봄"; }
+  });
+}
+
+async function markSeen(id, title, on) {
+  const r = on
+    ? await fetch("/api/recommend/seen", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, title }) })
+    : await fetch("/api/recommend/seen?id=" + encodeURIComponent(id), { method: "DELETE" });
+  renderSeen(await r.json());
+}
+function renderSeen(list) {
+  $("seen-n").textContent = list.length ? `(${list.length})` : "";
+  $("seen-list").innerHTML = list.map(s =>
+    `<div><span>${esc(s.id)} ${esc(s.title)}</span><button data-un="${esc(s.id)}">되돌리기</button></div>`).join("")
+    || `<p class="hint">아직 없습니다. 추천 결과에서 '들어봄'을 누르면 다음부터 빠집니다.</p>`;
+  $("seen-list").querySelectorAll("[data-un]").forEach(b => b.onclick = () => markSeen(b.dataset.un, "", false));
+}
+fetch("/api/recommend/seen").then(r => r.json()).then(renderSeen);
+</script>
+</body>
+</html>
