@@ -406,14 +406,31 @@ def fetch_info(ids):
     return out, failed
 
 
-def search_url(include_ids, keyword, order, page, any_tag=False):
+def search_url(include_ids, keyword, order, page, any_tag=False, exclude_ids=(),
+               year_from=None, year_to=None, price_max=None, rate_min=0.0, adult_only=False):
+    """DLsite 검색 주소. 조건을 주소에 넣어 두면 조건이 바뀔 때 캐시가 아니라 새로 검색한다.
+    받아 온 뒤에도 같은 조건으로 한 번 더 거르므로, DLsite 가 조건을 무시해도 결과는 맞다."""
     path = SEARCH
     for n, gid in enumerate(include_ids):
         path += f"/genre%5B{n}%5D/{gid}"
     if include_ids:
         path += "/genre_and_or/" + ("or" if any_tag else "and")
+    for n, gid in enumerate(exclude_ids):
+        path += f"/genre_not%5B{n}%5D/{gid}"
     if keyword:
         path += "/keyword/" + quote(keyword, safe="")
+    if year_from:
+        path += f"/regist_date_start/{year_from:04d}-01-01"
+    if year_to:
+        path += f"/regist_date_end/{year_to:04d}-12-31"
+    if price_max is not None:
+        path += f"/price_high/{price_max}"
+    # rate_average 는 'N점 이상' 이 아니라 별 구간이다: 5 = 4.5~5.0, 4 = 3.5~4.5.
+    # 4.5 이상일 때만 넘기고, 4.7 같은 세부 값은 받아 온 뒤 거른다
+    if rate_min >= 4.5:
+        path += "/rate_average/5"
+    if adult_only:
+        path += "/age_category%5B0%5D/adult"
     path += f"/order%5B0%5D/{ORDERS.get(_str(order), 'dl_d')}"
     if page > 1:
         path += f"/page/{page}"
@@ -517,11 +534,22 @@ def recommend(opts):
                       f"나머지 포함 태그로 찾은 작품만 보여줍니다.")
     pages = _int(opts.get("pages"), 3, 1, MAX_PAGES)
     keyword = _str(opts.get("keyword")).strip()
+    year_from = _int(opts.get("year_from"), 0, 0, 9999)
+    year_to = _int(opts.get("year_to"), 0, 0, 9999)
+    if year_from and year_to and year_from > year_to:
+        year_from, year_to = year_to, year_from
+    price_max = _int(opts.get("price_max"), None, 0)
+    rate_min = _float(opts.get("rate_min"), 0.0) or 0.0
+    # 제외 태그·출시 연도·가격·평점·연령도 DLsite 검색 조건으로 넘긴다. 예전에는 판매순 상위 N개를
+    # 받아 둔 뒤 그 안에서만 걸러서, 조건을 바꿔도 같은 후보 안에서 고르게 됐다
+    exclude_ids = [known[t] for t in exclude if t in known]
+    url_opts = dict(exclude_ids=exclude_ids, year_from=year_from or None, year_to=year_to or None,
+                    price_max=price_max, rate_min=rate_min, adult_only=bool(opts.get("adult_only", True)))
 
     pool = {}
     for p in range(1, pages + 1):
         try:
-            rows, total = fetch_page(search_url(include_ids, keyword, opts.get("order"), p, any_tag))
+            rows, total = fetch_page(search_url(include_ids, keyword, opts.get("order"), p, any_tag, **url_opts))
         except (requests.RequestException, ValueError) as e:
             errors.append(f"{p}쪽: {e}")
             break
@@ -534,11 +562,7 @@ def recommend(opts):
     errors += _health_warnings(pool)
 
     cv_mode = _str(opts.get("cv")) or "any"
-    year_from = _int(opts.get("year_from"), 0)
-    year_to = _int(opts.get("year_to"), 9999)
-    if year_from > year_to:
-        year_from, year_to = year_to, year_from
-    price_max = _int(opts.get("price_max"), None, 0)
+    year_lo, year_hi = year_from or 0, year_to or 9999
     counts = Counter()
     picked = []
     hide_owned = opts.get("hide_owned", True)
@@ -559,7 +583,7 @@ def recommend(opts):
         if (cv_mode == "1" and n_cv != 1) or (cv_mode == "2" and n_cv < 2):
             counts["성우 수"] += 1; continue
         year = int(w["date"][:4]) if w["date"] else 0
-        if year and not (year_from <= year <= year_to):
+        if year and not (year_lo <= year <= year_hi):
             counts["출시 연도"] += 1; continue
         if price_max is not None and w["price"] is not None and w["price"] > price_max:
             counts["가격"] += 1; continue
@@ -568,7 +592,6 @@ def recommend(opts):
     info, failed = fetch_info([w["id"] for w in picked])
     if failed:
         errors.append(f"작품 {len(failed)}개의 평점 정보를 받지 못했습니다.")
-    rate_min = _float(opts.get("rate_min"), 0.0) or 0.0
     out = []
     for w in picked:
         i = info.get(w["id"]) or {}
