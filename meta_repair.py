@@ -48,7 +48,10 @@ args = p.parse_args()
 if args.circles:
     import time
     import requests
-    from server import UA, apply_original
+    from server import apply_original, fetch_product
+    waits = (30, 60, 120)
+    def on_wait(sec):
+        print(f"  … DLsite 가 잠시 쉬라고 해서 {sec}초 기다립니다")
     changed = same = failed = 0
     for f in sorted(META_DIR.glob("*.json")):
         if args.only and f.stem.upper() != args.only.upper():
@@ -57,26 +60,24 @@ if args.circles:
         if not meta or meta.get("notfound"):
             continue
         try:
-            for wait in (30, 60, 120, None):
-                r = requests.get(f"https://www.dlsite.com/maniax/api/=/product.json?workno={f.stem}&locale=ko_KR",
-                                 headers={"User-Agent": UA}, timeout=15)
-                if r.status_code != 429 or wait is None:
-                    break
-                print(f"  … DLsite 가 잠시 쉬라고 해서 {wait}초 기다립니다")
-                time.sleep(wait)
-            r.raise_for_status()
-            data = r.json()
-        except (requests.RequestException, ValueError) as e:
+            item = fetch_product(f.stem, waits, on_wait)
+        except requests.RequestException as e:
             print(f"  X {f.stem}  조회 실패: {e}")
             failed += 1
             continue
-        if not isinstance(data, list) or not data:
+        if item is None:
             same += 1
             continue
         before = (meta.get("circle"), list(meta.get("cvs") or []))
-        if (data[0].get("translation_info") or {}).get("original_workno") not in (None, f.stem):
+        if (item.get("translation_info") or {}).get("original_workno") not in (None, f.stem):
             time.sleep(1)   # 원작을 한 번 더 조회한다
-        if apply_original(meta, data[0]):
+        result = apply_original(meta, item, waits, on_wait)
+        if result is None:
+            print(f"  X {f.stem}  원작 조회 실패 — 서클 그대로 (서버가 나중에 다시 시도)")
+            failed += 1
+            if args.apply:
+                save_meta(f.stem, meta)
+        elif result:
             changed += 1
             print(f"  {f.stem}  서클: {before[0]} → {meta['circle']}"
                   + (f"  / 성우 추가: {', '.join(meta['cvs'])}" if not before[1] and meta.get("cvs") else ""))
@@ -107,7 +108,7 @@ if args.retitle:
     except (OSError, ValueError):
         saved = {}
     # 미리보기 때 받은 번역을 재사용한다 — 같은 제목을 두 번 번역하는 요금을 아낀다
-    need = [m["title_orig"] for _rj, m in targets if m["title_orig"] not in saved]
+    need = list(dict.fromkeys(m["title_orig"] for _rj, m in targets if m["title_orig"] not in saved))
     if need:
         print(f"{OPENAI_MODEL} 로 제목 {len(need)}개 번역 중…")
         got = translate_ko_luna(need)

@@ -678,13 +678,13 @@ $("favbtn").onclick = () => {
 // 메타데이터가 없거나 제목 번역만 실패한 작품을 백그라운드에서 순차 조회
 async function backfillMeta() {
   for (const w of works) {
-    if (!w.rj || (w.hasMeta && !w.titlePending)) continue;
+    if (!w.rj || (w.hasMeta && !w.metaPending)) continue;
     try {
       const m = await (await fetch(`/api/meta/${w.rj}`)).json();
       if (m.notfound) { w.hasMeta = true; continue; }
       Object.assign(w, { title: m.title || w.title, titleOrig: m.title_orig, circle: m.circle,
                          genres: m.genres, cvs: m.cvs, date: m.date, hasMeta: true,
-                         titlePending: !!m.title_pending,
+                         titlePending: !!m.title_pending, metaPending: false,
                          hasCover: w.hasCover || !!m.image });
     } catch (e) { /* 오프라인이면 폴더명으로 표시 */ }
   }

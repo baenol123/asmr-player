@@ -16,6 +16,7 @@ import json
 import os
 import re
 import socket
+import threading
 import time
 import unicodedata
 import zlib
@@ -51,6 +52,8 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 # 네트워크 오류는 곧 복구되므로 짧게, 진짜 없는 작품은 길게 잡는다.
 RETRY_AFTER_FETCH_ERROR = 6 * 3600
 RETRY_AFTER_NOTFOUND = 30 * 86400
+# 번역판의 원작 조회가 실패(429 등)했을 때 다시 물어보기까지의 간격
+RETRY_AFTER_CIRCLE_ERROR = 600
 
 app = Flask(__name__, static_folder=str(BASE / "static"), static_url_path="/static")
 app.json.ensure_ascii = False   # 한글을 \uXXXX 로 늘리지 않는다
@@ -152,7 +155,20 @@ def load_meta(rj):
 
 
 def save_meta(rj, meta):
-    (META_DIR / f"{rj}.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    """임시 파일에 다 쓴 뒤 한 번에 바꿔 끼운다.
+
+    그냥 덮어쓰면 쓰는 도중에 다른 요청이 반쯤 쓰인 파일을 읽어 '메타 없음'으로 착각하고,
+    그 순간 DLsite 조회까지 실패하면 멀쩡한 메타가 실패 기록으로 덮인다."""
+    f = META_DIR / f"{rj}.json"
+    tmp = f.with_name(f"{f.name}.{os.getpid()}-{threading.get_ident()}.tmp")
+    tmp.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    for _ in range(10):
+        try:
+            os.replace(tmp, f)
+            return
+        except PermissionError:
+            time.sleep(0.05)   # Windows: 다른 요청이 그 파일을 읽는 중이면 잠깐 막힌다
+    os.replace(tmp, f)
 
 
 def meta_is_stale(meta):
@@ -176,6 +192,13 @@ def needs_translation(meta):
     if meta.get("title_pending"):
         return True
     return meta.get("title_orig") is None and bool(JA_CHARS.search(meta.get("title") or ""))
+
+
+def needs_circle_retry(meta):
+    """번역판인데 원작 조회가 실패해 서클이 번역 배포처로 남아 있고, 다시 물어볼 때가 됐는지."""
+    if not meta or not meta.get("circle_pending"):
+        return False
+    return time.time() - (meta.get("circle_checked_at") or 0) > RETRY_AFTER_CIRCLE_ERROR
 
 
 def repair_title(meta):
@@ -281,12 +304,15 @@ def scan_work_dir_uncached(folder):
         stem = norm_stem(rel.stem)
         hit = subs.get((str(rel.parent).lower(), stem)) or subs.get(stem)
         sub = hit[1] if hit else None
-        f = folder / rel
+        try:
+            size = (folder / rel).stat().st_size
+        except OSError:
+            continue   # 목록을 읽은 사이에 이름이 바뀌었거나(자막 생성 중) 지워진 파일은 건너뛴다
         out.append({
             "path": str(Path(folder.name) / rel).replace("\\", "/"),
             "name": rel.stem,
             "folder": str(rel.parent).replace("\\", "/") if str(rel.parent) != "." else "",
-            "size": f.stat().st_size,
+            "size": size,
             "srt": str(Path(folder.name) / sub).replace("\\", "/") if sub else None,
             "srtLang": subtitle_lang(folder / sub) if sub else None,
         })
@@ -334,6 +360,8 @@ def api_works():
             "hasMeta": meta is not None,
             # 제목 번역이 안 된 상태 - 프런트가 /api/meta 를 다시 불러 고치게 한다
             "titlePending": needs_translation(meta),
+            # 제목 번역이나 원작 서클 조회가 남아 있음 - 프런트가 /api/meta 를 다시 부른다
+            "metaPending": needs_translation(meta) or needs_circle_retry(meta),
             "hasCover": bool(local_cover) or (meta or {}).get("image") is not None,
             "localCover": local_cover,
             "tracks": tracks,
@@ -351,11 +379,31 @@ def api_meta(rj):
     if meta is None or meta_is_stale(meta):
         meta = fetch_meta(rj)
         save_meta(rj, meta)
-    elif needs_translation(meta):
-        # DLsite를 다시 부를 필요 없이 번역만 재시도한다
-        if repair_title(meta):
+    else:
+        dirty = False
+        if needs_translation(meta):
+            # DLsite를 다시 부를 필요 없이 번역만 재시도한다
+            dirty = repair_title(meta)
+        if needs_circle_retry(meta):
+            dirty = repair_circle(meta) or dirty
+        if dirty:
             save_meta(rj, meta)
     return jsonify(meta)
+
+
+def repair_circle(meta):
+    """원작 조회에 실패했던 번역판의 서클을 다시 시도한다. 메타가 바뀌었으면 True."""
+    try:
+        item = fetch_product(meta["rj"])
+    except requests.RequestException:
+        meta["circle_checked_at"] = time.time()
+        return True
+    if item is None:
+        meta.pop("circle_pending", None)
+        meta.pop("circle_checked_at", None)
+        return True
+    apply_original(meta, item)
+    return True
 
 
 JA_CHARS = re.compile(r"[぀-ヿ一-鿿]")
@@ -551,26 +599,51 @@ def cv_names(item):
     return [c.get("name") for c in (item.get("creaters") or {}).get("voice_by") or [] if c.get("name")]
 
 
-def apply_original(meta, item):
+def fetch_product(workno, waits=(2, 5), on_wait=None):
+    """DLsite 작품 정보(product.json)의 첫 항목. 없는 작품이면 None.
+
+    429(요청 과다)면 waits 의 초만큼 쉬었다가 다시 묻는다. 그래도 안 되거나 네트워크
+    오류면 requests.RequestException 을 던진다 — '없는 작품'과 '못 물어봄'을 구분하려고.
+    locale=ko_KR: 장르(태그)가 공식 한국어 명칭으로 온다."""
+    for wait in (*waits, None):
+        r = requests.get(f"https://www.dlsite.com/maniax/api/=/product.json?workno={workno}&locale=ko_KR",
+                         headers={"User-Agent": UA}, timeout=15)
+        if r.status_code != 429 or wait is None:
+            break
+        if on_wait:
+            on_wait(wait)
+        time.sleep(wait)
+    r.raise_for_status()
+    try:
+        data = r.json()
+    except ValueError as e:
+        raise requests.RequestException(f"JSON 이 아닌 응답: {e}") from e
+    return data[0] if isinstance(data, list) and data else None
+
+
+def apply_original(meta, item, waits=(2, 5), on_wait=None):
     """번역판이면 서클을 원작 서클로 바꾸고, 번역 배포처는 translator 에 남긴다.
 
     DLsite 번역판은 번역 배포처(예: Cream Pan)를 서클로 내세운다. 원작 번호
     (translation_info.original_workno)로 원작을 한 번 더 조회해 원작 서클을 쓴다.
-    성우가 비어 있으면 원작의 성우도 가져온다. 바뀌었으면 True."""
+    성우가 비어 있으면 원작의 성우도 가져온다.
+
+    반환: 바뀌었으면 True, 바꿀 게 없으면 False, 원작 조회에 실패했으면 None.
+    실패하면 circle_pending 표시를 남겨 서버가 나중에 다시 시도하게 한다."""
     orig = (item.get("translation_info") or {}).get("original_workno")
     if not orig or orig == meta.get("rj"):
         return False
     try:
-        r = requests.get(f"https://www.dlsite.com/maniax/api/=/product.json?workno={orig}&locale=ko_KR",
-                         headers={"User-Agent": UA}, timeout=15)
-        r.raise_for_status()
-        data = r.json()
-    except (requests.RequestException, ValueError):
-        return False   # 원작 조회 실패 — 번역 배포처 이름이라도 그대로 둔다
-    if not isinstance(data, list) or not data or not data[0].get("maker_name"):
-        return False
-    src = data[0]
-    changed = False
+        src = fetch_product(orig, waits, on_wait)
+    except requests.RequestException:
+        # 원작 조회 실패 — 일단 번역 배포처 이름을 두고, 표시를 남겨 나중에 다시 묻는다
+        meta["circle_pending"] = True
+        meta["circle_checked_at"] = time.time()
+        return None
+    changed = bool(meta.pop("circle_pending", None))
+    meta.pop("circle_checked_at", None)
+    if not src or not src.get("maker_name"):
+        return changed
     if meta.get("circle") != src["maker_name"]:
         meta["translator"] = item.get("maker_name")
         meta["circle"] = src["maker_name"]
@@ -583,19 +656,12 @@ def apply_original(meta, item):
 
 def fetch_meta(rj):
     try:
-        r = requests.get(
-            # locale=ko_KR: 장르(태그)가 공식 한국어 명칭으로 옴
-            f"https://www.dlsite.com/maniax/api/=/product.json?workno={rj}&locale=ko_KR",
-            headers={"User-Agent": UA}, timeout=15,
-        )
-        r.raise_for_status()
-        data = r.json()
-    except (requests.RequestException, ValueError):
+        item = fetch_product(rj)
+    except requests.RequestException:
         # 네트워크·서버 오류: 작품이 없는 게 아니라 못 물어본 것 → 곧 재시도
         return {"rj": rj, "notfound": True, "error": "fetch", "checked_at": time.time()}
-    if not isinstance(data, list) or not data:
+    if item is None:
         return {"rj": rj, "notfound": True, "checked_at": time.time()}
-    item = data[0]
     img = (item.get("image_main") or {}).get("url")
     if img and img.startswith("//"):
         img = "https:" + img
@@ -626,7 +692,7 @@ def api_cover(work_id):
 
     # JSON/DLsite 표지를 먼저 사용한다. 실패하거나 표지 정보가 없을 때만 로컬 이미지를 쓴다.
     if rj:
-        for ext in (".jpg", ".png", ".webp"):
+        for ext in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
             cached = COVER_DIR / (rj + ext)
             if cached.is_file():
                 return send_file(cached, conditional=True)
@@ -645,7 +711,11 @@ def api_cover(work_id):
                 cached.write_bytes(r.content)
                 return send_file(cached, conditional=True)
 
-    folder = WORKS_DIR / work_id
+    folder = (WORKS_DIR / work_id).resolve()
+    try:
+        folder.relative_to(WORKS_DIR.resolve())   # works 밖(C:/ 나 ../..)을 훑지 못하게
+    except ValueError:
+        abort(404)
     if folder.is_dir():
         _, local_cover, _ = scan_work_dir(folder)
         if local_cover:
