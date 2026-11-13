@@ -166,7 +166,6 @@ details.panel .body { padding: 0 16px 16px; }
   <section>
     <button id="go">추천 받기</button>
     <div id="status"></div>
-    <p class="hint">미성년으로 보이는 설정의 작품은 조건과 상관없이 항상 빠집니다.</p>
   </section>
 
   <section id="results"></section>
@@ -251,7 +250,7 @@ fetch("/api/recommend/tags").then(r => r.json()).then(d => {
     `DLsite에서 이름이 바뀐 옛 태그 ${d.old.length}개는 검색할 수 없어 뺐습니다: ${d.old.map(t => t[0]).join(", ")}`;
 });
 
-const FILTER_NAMES = ["소장", "들어봄", "미성년 설정", "전연령", "포함 태그 없음", "제외 태그", "성우 수", "출시 연도", "가격", "평점"];
+const FILTER_NAMES = ["소장", "들어봄", "전연령", "포함 태그 없음", "제외 태그", "성우 수", "출시 연도", "가격", "평점"];
 
 $("go").onclick = async () => {
   const body = { include: [], exclude: [], adult_only: !$("all_ages").checked, show_seen: $("show_seen").checked,
