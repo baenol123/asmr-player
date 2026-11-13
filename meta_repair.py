@@ -13,6 +13,11 @@ server.py 가 실패를 영구 캐시하던 시절에 만들어진 파일들이 
 태그만 DLsite 에서 새로 받기 (제목·번역은 그대로 둔다):
   python meta_repair.py --tags            # 바뀔 태그 미리보기
   python meta_repair.py --tags --apply    # 실제 수정
+
+이미 번역된 제목을 OpenAI(자막과 같은 모델, 용어집·교정치환 적용)로 다시 번역:
+  python meta_repair.py --retitle            # 바뀔 제목 미리보기 (요금은 이때도 나간다)
+  python meta_repair.py --retitle --apply    # 실제 수정
+  미리보기 결과는 cache/retitle_preview.json 에 저장되고, 이어서 --apply 하면 그 결과를 다시 번역하지 않고 쓴다.
 """
 import argparse
 import sys
@@ -24,14 +29,59 @@ except (AttributeError, OSError):
     pass
 
 from server import (META_DIR, deepl_key, gemini_key, load_meta, needs_translation, save_meta,
-                    translate_ko_batch)
+                    translate_ko_batch, translate_ko_luna)
+from subgen import OPENAI_MODEL, openai_key
 
 p = argparse.ArgumentParser()
 p.add_argument("--apply", action="store_true", help="실제로 파일을 수정한다")
 p.add_argument("--only", metavar="RJ", help="이 RJ코드 하나만 처리")
 p.add_argument("--models", action="store_true", help="Gemini에서 쓸 수 있는 모델 ID를 보여준다")
 p.add_argument("--tags", action="store_true", help="태그만 DLsite 에서 새로 받는다 (제목은 그대로)")
+p.add_argument("--retitle", action="store_true", help="번역된 제목을 OpenAI 로 다시 번역한다")
 args = p.parse_args()
+
+if args.retitle:
+    import json
+    if not openai_key():
+        sys.exit("openai_key.txt 가 없습니다.")
+    preview_file = META_DIR.parent / "retitle_preview.json"
+    targets = []
+    for f in sorted(META_DIR.glob("*.json")):
+        if args.only and f.stem.upper() != args.only.upper():
+            continue
+        meta = load_meta(f.stem)
+        if meta and not meta.get("notfound") and meta.get("title_orig"):
+            targets.append((f.stem, meta))
+    try:
+        saved = json.loads(preview_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        saved = {}
+    # 미리보기 때 받은 번역을 재사용한다 — 같은 제목을 두 번 번역하는 요금을 아낀다
+    need = [m["title_orig"] for _rj, m in targets if m["title_orig"] not in saved]
+    if need:
+        print(f"{OPENAI_MODEL} 로 제목 {len(need)}개 번역 중…")
+        got = translate_ko_luna(need)
+        saved.update({need[i]: ko for i, ko in got.items()})
+        preview_file.write_text(json.dumps(saved, ensure_ascii=False, indent=1), encoding="utf-8")
+    changed = same = failed = 0
+    for rj, meta in targets:
+        new = saved.get(meta["title_orig"])
+        if not new:
+            failed += 1
+            print(f"  X {rj}  번역 실패(거절 등) — 기존 제목 유지: {meta['title'][:50]}")
+            continue
+        if new == meta["title"]:
+            same += 1
+            continue
+        changed += 1
+        print(f"  {rj}\n    전: {meta['title']}\n    후: {new}")
+        if args.apply:
+            meta["title"] = new
+            save_meta(rj, meta)
+    print(f"\n바뀜 {changed} / 같음 {same} / 실패 {failed}")
+    if changed and not args.apply:
+        print("--retitle --apply 로 실행하면 실제로 수정합니다 (번역은 다시 하지 않습니다).")
+    sys.exit(0)
 
 if args.tags:
     import time
@@ -127,8 +177,8 @@ if tr_targets:
     if not args.apply:
         for rj, _meta, title in tr_targets:
             print(f"  - {rj}  {title[:60]}")
-    elif not gemini_key() and not deepl_key():
-        print("  번역 키가 없어 건너뜁니다. gemini_key.txt 또는 deepl_key.txt 를 만드세요.")
+    elif not openai_key() and not gemini_key() and not deepl_key():
+        print("  번역 키가 없어 건너뜁니다. openai_key.txt, gemini_key.txt, deepl_key.txt 중 하나를 만드세요.")
     else:
         # 하나씩 부르지 않고 묶어서 보낸다
         result = translate_ko_batch([t for _rj, _m, t in tr_targets])

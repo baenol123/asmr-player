@@ -492,24 +492,44 @@ def translate_ko_deepl(texts, attempts=3):
     return out
 
 
-def translate_ko_batch(texts):
-    """Gemini를 먼저 쓰고, 안 되면 DeepL로 넘긴다.
+def translate_ko_luna(texts):
+    """OpenAI(자막과 같은 모델)로 제목을 번역한다. 용어집·교정치환·번역지시가 적용된다.
+    {입력 순번: 번역} 을 돌려준다. 거절되거나 실패한 제목은 빠진다."""
+    if not subgen.openai_key():
+        return {}
+    try:
+        got = subgen.translate_titles(texts, subgen.BASE, for_files=False)
+    except Exception as e:   # 키·한도·네트워크 오류 — Gemini/DeepL 로 넘긴다
+        print(f"  [번역] {subgen.OPENAI_MODEL} 실패({type(e).__name__}) - 다음 번역기로 넘어갑니다.")
+        return {}
+    return {i: got[t] for i, t in enumerate(texts) if t in got}
 
-    입력과 같은 길이의 리스트를 돌려주고, 둘 다 실패하면 None.
-    호출부는 None을 받으면 title_pending 으로 표시해 뒀다가 나중에 다시 시도한다."""
+
+def translate_ko_batch(texts):
+    """OpenAI(Luna) → Gemini → DeepL 순으로, 앞에서 못 한 제목만 다음으로 넘긴다.
+
+    입력과 같은 길이의 리스트를 돌려준다. 끝까지 번역하지 못한 자리는 None,
+    하나도 번역하지 못하면 None. 호출부는 빈 자리를 title_pending 으로 표시해 뒀다가 나중에 다시 시도한다."""
     texts = list(texts)
     if not texts:
         return []
-    got = translate_ko_gemini(texts)
-    if got:
-        return got
-    got = translate_ko_deepl(texts)
-    if got:
-        print("  [번역] Gemini 실패 - DeepL로 처리했습니다.")
-        return got
-    if not gemini_key() and not deepl_key():
-        print("  [번역] 사용 가능한 키가 없습니다. gemini_key.txt 또는 deepl_key.txt 를 만드세요.")
-    return None
+    out = [None] * len(texts)
+    for i, ko in translate_ko_luna(texts).items():
+        out[i] = ko
+    for name, fn in (("Gemini", translate_ko_gemini), ("DeepL", translate_ko_deepl)):
+        left = [i for i, ko in enumerate(out) if not ko]
+        if not left:
+            break
+        got = fn([texts[i] for i in left])
+        if got:
+            for i, ko in zip(left, got):
+                out[i] = ko
+            print(f"  [번역] 제목 {len(left)}개를 {name}(으)로 처리했습니다.")
+    if not any(out):
+        if not subgen.openai_key() and not gemini_key() and not deepl_key():
+            print("  [번역] 사용 가능한 키가 없습니다. openai_key.txt, gemini_key.txt, deepl_key.txt 중 하나를 만드세요.")
+        return None
+    return out
 
 
 def translate_ko(text):
@@ -703,13 +723,14 @@ def lan_ips():
 
 if __name__ == "__main__":
     print(f"\n  작품 폴더: {WORKS_DIR}")
-    g, d = bool(gemini_key()), bool(deepl_key())
-    if g or d:
-        chain = " → ".join(([f"Gemini({GEMINI_MODEL})"] if g else []) + (["DeepL"] if d else []))
-        print(f"  번역:      {chain}")
+    o, g, d = bool(subgen.openai_key()), bool(gemini_key()), bool(deepl_key())
+    if o or g or d:
+        chain = " → ".join(([f"{subgen.OPENAI_MODEL}"] if o else []) + ([f"Gemini({GEMINI_MODEL})"] if g else [])
+                           + (["DeepL"] if d else []))
+        print(f"  제목 번역: {chain}")
     else:
         print("  [!] 번역 키 없음 - 제목 자동번역이 꺼집니다.")
-        print(f"      {BASE / 'gemini_key.txt'} 또는 {BASE / 'deepl_key.txt'} 에 저장하면")
+        print(f"      {BASE / 'openai_key.txt'}, {BASE / 'gemini_key.txt'}, {BASE / 'deepl_key.txt'} 중 하나에 저장하면")
         print("      재시작 없이 적용됩니다.")
     print(f"  PC에서:    http://localhost:{PORT}")
     for ip in lan_ips():

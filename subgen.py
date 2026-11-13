@@ -887,8 +887,9 @@ def build_name_prompt(items, opts):
     return "\n".join(lines)
 
 
-def translate_titles(titles, work):
-    """번역에 성공한 제목만 담은 사전을 돌려준다. 일본어·중국어가 남은 결과는 버린다."""
+def translate_titles(titles, work, for_files=True):
+    """번역에 성공한 제목만 담은 사전을 돌려준다. 일본어·중국어가 남은 결과는 버린다.
+    for_files=False 면 파일명에 못 쓰는 글자(?, : 등)를 지우지 않는다 — 작품 제목 표시용."""
     items = [{"id": i, "text": t} for i, t in enumerate(titles)]
     opts = {"names": True, "style": load_instructions(work), "glossary": load_glossary(work)}
     corrections = load_pairs(work, "교정치환.txt")
@@ -898,7 +899,8 @@ def translate_titles(titles, work):
         got.update(translate_batch(items[offset:offset + 100], opts, budget))
     out = {}
     for i, title in enumerate(titles):
-        text = clean_name(apply_corrections(got.get(i, ""), corrections)).strip()
+        text = apply_corrections(got.get(i, ""), corrections)
+        text = (clean_name(text) if for_files else re.sub(r"\s+", " ", text)).strip()
         if text and not FOREIGN.search(text):
             out[title] = text
     return out
