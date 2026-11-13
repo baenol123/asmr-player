@@ -518,6 +518,15 @@ def translate_ko(text):
     return got[0] if got else None
 
 
+def genre_names(item):
+    """DLsite 페이지에 실제로 보이는 태그 이름.
+
+    API 의 genres 는 원래 이름(예: 최면음성, 조교)이고, 사이트 화면은 순화된
+    genres_replaced(트랜스/암시보이스, 가르침)를 보여준다. 화면과 맞추려고 후자를 쓴다."""
+    genres = item.get("genres_replaced") or item.get("genres") or []
+    return [g.get("name") for g in genres if g.get("name")]
+
+
 def fetch_meta(rj):
     try:
         r = requests.get(
@@ -545,7 +554,7 @@ def fetch_meta(rj):
         "title_orig": title if title_ko else None,
         "circle": item.get("maker_name"),
         "image": img,
-        "genres": [g.get("name") for g in item.get("genres") or [] if g.get("name")],
+        "genres": genre_names(item),
         "cvs": [c.get("name") for c in (item.get("creaters") or {}).get("voice_by") or [] if c.get("name")],
         "date": item.get("regist_date"),
     }

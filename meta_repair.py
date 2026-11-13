@@ -9,6 +9,10 @@ server.py 가 실패를 영구 캐시하던 시절에 만들어진 파일들이 
   python meta_repair.py            # 무엇을 고칠지 보여주기만
   python meta_repair.py --apply    # 실제 수정
   python meta_repair.py --apply --only RJ01234567
+
+태그만 DLsite 에서 새로 받기 (제목·번역은 그대로 둔다):
+  python meta_repair.py --tags            # 바뀔 태그 미리보기
+  python meta_repair.py --tags --apply    # 실제 수정
 """
 import argparse
 import sys
@@ -26,7 +30,57 @@ p = argparse.ArgumentParser()
 p.add_argument("--apply", action="store_true", help="실제로 파일을 수정한다")
 p.add_argument("--only", metavar="RJ", help="이 RJ코드 하나만 처리")
 p.add_argument("--models", action="store_true", help="Gemini에서 쓸 수 있는 모델 ID를 보여준다")
+p.add_argument("--tags", action="store_true", help="태그만 DLsite 에서 새로 받는다 (제목은 그대로)")
 args = p.parse_args()
+
+if args.tags:
+    import time
+    import requests
+    from server import UA, genre_names
+    files = sorted(META_DIR.glob("*.json"))
+    if args.only:
+        files = [f for f in files if f.stem.upper() == args.only.upper()]
+    changed = same = failed = 0
+    for f in files:
+        meta = load_meta(f.stem)
+        if not meta or meta.get("notfound"):
+            continue
+        try:
+            for wait in (30, 60, 120, None):
+                r = requests.get(f"https://www.dlsite.com/maniax/api/=/product.json?workno={f.stem}&locale=ko_KR",
+                                 headers={"User-Agent": UA}, timeout=15)
+                if r.status_code != 429 or wait is None:
+                    break
+                # 요청이 너무 많다는 응답 — 잠시 쉬었다가 다시 묻는다
+                print(f"  … DLsite 가 잠시 쉬라고 해서 {wait}초 기다립니다")
+                time.sleep(wait)
+            r.raise_for_status()
+            data = r.json()
+        except (requests.RequestException, ValueError) as e:
+            print(f"  X {f.stem}  조회 실패: {e}")
+            failed += 1
+            continue
+        if not isinstance(data, list) or not data:
+            print(f"  X {f.stem}  DLsite 에 정보 없음 (판매 종료 등) — 그대로 둠")
+            failed += 1
+            continue
+        new = genre_names(data[0])
+        old = meta.get("genres") or []
+        if new == old:
+            same += 1
+        else:
+            gone = [t for t in old if t not in new]
+            added = [t for t in new if t not in old]
+            print(f"  {f.stem}  -{', '.join(gone) or '없음'}  +{', '.join(added) or '없음'}")
+            changed += 1
+            if args.apply:
+                meta["genres"] = new
+                save_meta(f.stem, meta)
+        time.sleep(1)   # DLsite 에 연달아 보내지 않게 (너무 빠르면 429 로 막힌다)
+    print(f"\n바뀜 {changed} / 같음 {same} / 실패 {failed}")
+    if changed and not args.apply:
+        print("--tags --apply 로 실행하면 실제로 수정합니다.")
+    sys.exit(0)
 
 if args.models:
     import requests
