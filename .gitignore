@@ -13,3 +13,15 @@ cache/
 __pycache__/
 *.pyc
 *.bak-*
+
+# 개인 작업물과 배포 결과물 (공개하지 않음)
+dist/
+자막작업/
+demo-works/
+test/
+asmr_dl.py
+asmr-one-downloader.user.js
+serve-userscript.js
+python
+03 txt테스트.txt
+readme.txt
