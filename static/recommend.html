@@ -93,6 +93,13 @@ label.f { display: flex; flex-direction: column; gap: 4px; font-size: 12px; colo
 .card.seen { opacity: .45; }
 .card .own { font-size: 11px; padding: 0 6px; border-radius: 4px; border: 1px solid var(--accent); color: var(--accent); margin-right: 6px; vertical-align: 1px; }
 
+#results { scroll-margin-top: calc(72px + env(safe-area-inset-top, 0px)); }   /* 붙어 있는 헤더에 가리지 않게 */
+.pager { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 16px 0; border-top: 1px solid var(--line);
+  font-size: 13px; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
+.pager[hidden] { display: none; }
+.pager button { padding: 8px 14px; border-radius: 8px; background: var(--bg3); color: var(--fg); transition: opacity 150ms var(--ease); }
+.pager button:disabled { opacity: .35; cursor: default; }
+
 #seen-list div { display: flex; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 12px; color: var(--fg-dim); }
 #seen-list div span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #seen-list button { text-decoration: underline; color: var(--fg-dim); }
@@ -169,6 +176,9 @@ details.panel .body { padding: 0 16px 16px; }
   </section>
 
   <section id="results"></section>
+  <nav class="pager" id="pager" hidden>
+    <button id="prev">이전</button><span id="page-no"></span><button id="next">다음</button>
+  </nav>
 
   <section>
     <details><summary>들어봄으로 표시한 작품 <span id="seen-n"></span></summary><div id="seen-list"></div></details>
@@ -257,6 +267,7 @@ $("go").onclick = async () => {
                  hide_owned: $("hide_owned").checked };
   for (const [t, v] of Object.entries(state.tags)) (v === "inc" ? body.include : body.exclude).push(t);
   for (const f of FIELDS) body[f] = $(f).value;
+  body.limit = 3000;   // 결과는 전부 받아서 페이지에서 나눠 보여준다
   $("go").disabled = true; $("status").className = ""; $("status").textContent = "DLsite에서 찾는 중…";
   try {
     const r = await fetch("/api/recommend", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -282,11 +293,31 @@ function scoreParts(p) {
 function render(d) {
   const f = d.filtered || {};
   const parts = FILTER_NAMES.filter(k => f[k]).map(k => `${k} ${f[k]}`);
-  $("status").textContent = `${d.pool}개 중 ${d.matched}개가 조건에 맞습니다` + (parts.length ? ` · 제외: ${parts.join(", ")}` : "")
+  // DLsite 전체 수 → 그중 받아 온 수 → 최종으로 남은 수. 결과가 적을 때 조건이 좁은 건지 범위가 좁은 건지 보이게
+  const n = x => Number(x).toLocaleString();
+  const head = d.total != null
+    ? `DLsite 검색 결과 ${n(d.total)}개` + (d.total > d.pool ? ` 중 ${n(d.pool)}개 확인` : "") + `, ${n(d.matched)}개가 조건에 맞습니다`
+      + (d.total > d.pool ? " (검색 범위를 넓히면 더 볼 수 있습니다)" : "")
+    : `${n(d.pool)}개 중 ${n(d.matched)}개가 조건에 맞습니다`;
+  $("status").textContent = head + (d.works.length < d.matched ? ` · 상위 ${n(d.works.length)}개 표시` : "")
+    + (parts.length ? ` · 제외: ${parts.join(", ")}` : "")
     + (d.unknown_tags?.length ? ` · DLsite에서 못 찾은 태그: ${d.unknown_tags.join(", ")}` : "")
     + (d.errors?.length ? ` · 일부 실패: ${d.errors.join("; ")}` : "");
+  works = d.works;
+  pageNo = 0;
+  drawPage();
+}
+
+// ── 결과 페이지 나누기 ──
+const PAGE_SIZE = 40;
+let works = [], pageNo = 0;
+const pageCount = () => Math.max(1, Math.ceil(works.length / PAGE_SIZE));
+
+function drawPage() {
+  pageNo = Math.min(pageNo, pageCount() - 1);
   const inc = new Set(Object.keys(state.tags).filter(t => state.tags[t] === "inc"));
-  $("results").innerHTML = d.works.map(w => `
+  const shown = works.slice(pageNo * PAGE_SIZE, (pageNo + 1) * PAGE_SIZE);
+  $("results").innerHTML = shown.map(w => `
     <div class="card ${w.seen ? "seen" : ""}" data-id="${w.id}">
       <a href="${w.url}" target="_blank" rel="noopener"><img loading="lazy" src="${esc(w.thumb || "")}" alt=""></a>
       <div>
@@ -305,10 +336,33 @@ function render(d) {
   $("results").querySelectorAll("[data-seen]").forEach(b => b.onclick = async () => {
     const card = b.closest(".card"), on = !card.classList.contains("seen");
     await markSeen(b.dataset.seen, b.dataset.title, on);
-    if (on && !$("show_seen").checked) card.remove();
-    else { card.classList.toggle("seen", on); b.textContent = on ? "들어봄 취소" : "들어봄"; }
+    const w = works.find(x => x.id === b.dataset.seen);
+    if (on && !$("show_seen").checked) {
+      // 목록에서 빼고 이 페이지를 다시 그린다 — 다음 작품이 올라와 빈자리를 채운다
+      works = works.filter(x => x !== w);
+      drawPage();
+    } else {
+      if (w) w.seen = on;
+      card.classList.toggle("seen", on); b.textContent = on ? "들어봄 취소" : "들어봄";
+    }
   });
+
+  const many = works.length > PAGE_SIZE;
+  $("pager").hidden = !many;
+  if (many) {
+    $("page-no").textContent = `${pageNo + 1} / ${pageCount()}`;
+    $("prev").disabled = pageNo === 0;
+    $("next").disabled = pageNo >= pageCount() - 1;
+  }
 }
+
+function goPage(delta) {
+  pageNo = Math.max(0, Math.min(pageCount() - 1, pageNo + delta));
+  drawPage();
+  $("results").scrollIntoView({ block: "start" });
+}
+$("prev").onclick = () => goPage(-1);
+$("next").onclick = () => goPage(1);
 
 async function markSeen(id, title, on) {
   const r = on

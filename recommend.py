@@ -32,7 +32,7 @@ CACHE_SECONDS = 30 * 60
 CACHE_MAX = 5000          # 캐시 항목이 이보다 많아지면 만료된 것부터 지운다
 LIBRARY_SECONDS = 60      # 소장작 스캔 결과를 재사용하는 시간
 MAX_PAGES = 30
-MAX_LIMIT = 300
+MAX_LIMIT = MAX_PAGES * PER_PAGE   # 페이지에서 나눠 보여주므로 받아 온 만큼 다 돌려줄 수 있게
 REQUEST_GAP = 0.5         # 캐시에 없는 DLsite 요청 사이 최소 간격(초)
 GENRE_LIST = "https://www.dlsite.com/maniax/genre/list"
 GENRE_LIST_SECONDS = 24 * 3600
@@ -547,12 +547,15 @@ def recommend(opts):
                     price_max=price_max, rate_min=rate_min, adult_only=bool(opts.get("adult_only", True)))
 
     pool = {}
+    dlsite_total = None   # DLsite 가 알려 준, 조건에 맞는 전체 작품 수
     for p in range(1, pages + 1):
         try:
             rows, total = fetch_page(search_url(include_ids, keyword, opts.get("order"), p, any_tag, **url_opts))
         except (requests.RequestException, ValueError) as e:
             errors.append(f"{p}쪽: {e}")
             break
+        if total is not None:
+            dlsite_total = total
         for r in rows:
             pool.setdefault(r["id"], r)
         # 읽어 낸 줄 수가 아니라 DLsite 가 알려 준 전체 수로 끝을 판단한다.
@@ -620,7 +623,7 @@ def recommend(opts):
     out.sort(key=keys[sort], reverse=sort == "new")
     limit = _int(opts.get("limit"), 60, 1, MAX_LIMIT)
     unknown = [t for t in include + exclude if t not in known]
-    return {"works": out[:limit], "pool": len(pool), "matched": len(out),
+    return {"works": out[:limit], "total": dlsite_total, "pool": len(pool), "matched": len(out),
             "filtered": counts, "errors": errors, "unknown_tags": unknown}
 
 
