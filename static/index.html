@@ -366,6 +366,14 @@ body.immersive #p-cue { flex: 1; max-height: none; line-height: 1.7; }
 .cue-line { padding: 9px 10px; border-radius: 10px; font-size: 15px; line-height: 1.55; color: var(--fg-dim); cursor: pointer; }
 .cue-line .ts { font-size: 11px; color: var(--dim3); margin-right: 8px; font-variant-numeric: tabular-nums; }
 .cue-line.cur { background: var(--bg3); color: var(--cue-color, var(--fg)); }
+/* 대사 사이: 방금 끝난 줄을 옅게 표시해 위치를 잃지 않게 */
+.cue-line.prev { box-shadow: inset 3px 0 0 var(--accent); color: var(--fg); }
+#tr-follow {
+  position: absolute; left: 50%; bottom: calc(18px + var(--safe-b)); transform: translateX(-50%);
+  display: none; padding: 9px 16px; border-radius: 999px; font-size: 13px;
+  background: var(--fg); color: var(--bg); box-shadow: 0 4px 16px rgba(0,0,0,.35);
+}
+#tr-follow.show { display: block; }
 
 .spin { text-align: center; color: var(--fg-dim); padding: 40px; grid-column: 1/-1; }
 
@@ -506,6 +514,7 @@ body.immersive #p-cue { flex: 1; max-height: none; line-height: 1.7; }
   <div id="transcript">
     <div id="tr-head"><b>자막</b><button id="tr-close"><svg class="i"><use href="#i-x"/></svg></button></div>
     <div id="tr-list"></div>
+    <button id="tr-follow">현재 위치로</button>
   </div>
 </div>
 
@@ -584,6 +593,7 @@ let doneTracks = store.get("doneTracks", {});       // 끝까지 들은 트랙 p
 let lastPlayed = store.get("lastPlayed", null);     // 이어 듣기 정보
 let favOnly = localStorage.getItem("favOnly") === "1";
 let cues = [], activeKey = "", loadedSrt = null;
+let trFollow = true;   // 전체 자막에서 현재 줄을 따라 스크롤할지. 손으로 스크롤하면 꺼진다
 let seeking = false;
 const SPEEDS = [1.0, 1.2, 1.5, 2.0, 0.8];
 let speedIdx = 0;
@@ -1161,38 +1171,59 @@ function updateCue(t) {
   // 현재 시각에 활성인 큐를 전부 수집 — 화자가 여럿이라 시간이 겹치면 위아래로 쌓아 표시.
   // 시작시간 정렬이므로 s > t 이후는 볼 필요 없음.
   const act = [];
+  let last = -1;   // 이미 시작한 마지막 줄 — 대사 사이 구간의 위치 표시용
   for (let i = 0; i < cues.length; i++) {
     if (cues[i].s > t) break;
+    last = i;
     if (t < cues[i].e) act.push(i);
   }
-  const key = act.join(",");
+  const key = act.length ? act.join(",") : "p" + last;
   if (key === activeKey) return;
+  const textChanged = act.length || activeKey === "" || !activeKey.startsWith("p");
   activeKey = key;
-  $("p-cue").className = "";
-  $("p-cue").innerHTML = act.map(i =>
-    `<div class="cline">${esc(cues[i].txt).replace(/\n/g, "<br>")}</div>`).join("");
-  $("mini-cue").textContent = act.map(i => cues[i].txt.replace(/\n/g, " ")).join("  ∥  ");
-  document.querySelectorAll(".cue-line.cur").forEach(el => el.classList.remove("cur"));
-  act.forEach(i => { const el = $("tr-list").children[i]; if (el) el.classList.add("cur"); });
-  if (act.length && $("transcript").classList.contains("open")) {
-    const el = $("tr-list").children[act[0]];
-    if (el) el.scrollIntoView({ block: "center", behavior: "smooth" });
+  if (textChanged) {
+    $("p-cue").className = "";
+    $("p-cue").innerHTML = act.map(i =>
+      `<div class="cline">${esc(cues[i].txt).replace(/\n/g, "<br>")}</div>`).join("");
+    $("mini-cue").textContent = act.map(i => cues[i].txt.replace(/\n/g, " ")).join("  ∥  ");
   }
+  document.querySelectorAll(".cue-line.cur, .cue-line.prev").forEach(el => el.classList.remove("cur", "prev"));
+  act.forEach(i => { const el = $("tr-list").children[i]; if (el) el.classList.add("cur"); });
+  if (!act.length && last >= 0) { const el = $("tr-list").children[last]; if (el) el.classList.add("prev"); }
+  if (trFollow && $("transcript").classList.contains("open")) scrollToCurrent(true);
 }
+
+function scrollToCurrent(smooth) {
+  const el = document.querySelector(".cue-line.cur, .cue-line.prev");
+  if (!el) return;
+  // 멀리 떨어져 있으면(탐색·버튼) 바로 이동한다. 부드러운 스크롤은 길면 느리고 중간에 끊긴다
+  const list = $("tr-list"), far = Math.abs(el.offsetTop - list.scrollTop - list.clientHeight / 2) > list.clientHeight;
+  el.scrollIntoView({ block: "center", behavior: smooth && !far ? "smooth" : "auto" });
+}
+function setFollow(on) {
+  trFollow = on;
+  $("tr-follow").classList.toggle("show", !on);
+  if (on) scrollToCurrent(true);
+}
+// 사용자가 직접 스크롤할 때만 따라가기를 끈다 (자동 스크롤이 내는 scroll 이벤트와 구분)
+["wheel", "touchmove"].forEach(ev =>
+  $("tr-list").addEventListener(ev, () => { if (trFollow) setFollow(false); }, { passive: true }));
+$("tr-list").addEventListener("keydown", () => { if (trFollow) setFollow(false); });
+$("tr-follow").onclick = () => setFollow(true);
 
 function renderTranscript() {
   $("tr-list").innerHTML = cues.length
     ? cues.map((c, i) => `<div class="cue-line" data-i="${i}"><span class="ts">${fmt(c.s)}</span>${esc(c.txt)}</div>`).join("")
     : `<div class="spin">이 트랙에는 자막이 없습니다</div>`;
   document.querySelectorAll(".cue-line").forEach(el =>
-    el.onclick = () => { audio.currentTime = cues[+el.dataset.i].s; audio.play(); });
+    el.onclick = () => { audio.currentTime = cues[+el.dataset.i].s; audio.play(); setFollow(true); });
 }
 $("p-tr").onclick = () => {
   closeSettings();
   $("transcript").classList.add("open");
   history.pushState({ v: "tr" }, "");
-  const el = document.querySelector(".cue-line.cur");
-  if (el) el.scrollIntoView({ block: "center" });
+  trFollow = true; $("tr-follow").classList.remove("show");
+  scrollToCurrent(false);
 };
 $("tr-close").onclick = () => history.back();
 
