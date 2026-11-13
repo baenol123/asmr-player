@@ -547,6 +547,40 @@ def genre_names(item):
     return [g.get("name") for g in genres if g.get("name")]
 
 
+def cv_names(item):
+    return [c.get("name") for c in (item.get("creaters") or {}).get("voice_by") or [] if c.get("name")]
+
+
+def apply_original(meta, item):
+    """번역판이면 서클을 원작 서클로 바꾸고, 번역 배포처는 translator 에 남긴다.
+
+    DLsite 번역판은 번역 배포처(예: Cream Pan)를 서클로 내세운다. 원작 번호
+    (translation_info.original_workno)로 원작을 한 번 더 조회해 원작 서클을 쓴다.
+    성우가 비어 있으면 원작의 성우도 가져온다. 바뀌었으면 True."""
+    orig = (item.get("translation_info") or {}).get("original_workno")
+    if not orig or orig == meta.get("rj"):
+        return False
+    try:
+        r = requests.get(f"https://www.dlsite.com/maniax/api/=/product.json?workno={orig}&locale=ko_KR",
+                         headers={"User-Agent": UA}, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+    except (requests.RequestException, ValueError):
+        return False   # 원작 조회 실패 — 번역 배포처 이름이라도 그대로 둔다
+    if not isinstance(data, list) or not data or not data[0].get("maker_name"):
+        return False
+    src = data[0]
+    changed = False
+    if meta.get("circle") != src["maker_name"]:
+        meta["translator"] = item.get("maker_name")
+        meta["circle"] = src["maker_name"]
+        changed = True
+    if not meta.get("cvs") and cv_names(src):
+        meta["cvs"] = cv_names(src)
+        changed = True
+    return changed
+
+
 def fetch_meta(rj):
     try:
         r = requests.get(
@@ -575,9 +609,10 @@ def fetch_meta(rj):
         "circle": item.get("maker_name"),
         "image": img,
         "genres": genre_names(item),
-        "cvs": [c.get("name") for c in (item.get("creaters") or {}).get("voice_by") or [] if c.get("name")],
+        "cvs": cv_names(item),
         "date": item.get("regist_date"),
     }
+    apply_original(meta, item)
     if needs_tr and not title_ko:
         # 메타는 멀쩡하고 번역만 실패 — 다음 조회 때 번역만 다시 시도한다
         meta["title_pending"] = True

@@ -18,6 +18,10 @@ server.py 가 실패를 영구 캐시하던 시절에 만들어진 파일들이 
   python meta_repair.py --retitle            # 바뀔 제목 미리보기 (요금은 이때도 나간다)
   python meta_repair.py --retitle --apply    # 실제 수정
   미리보기 결과는 cache/retitle_preview.json 에 저장되고, 이어서 --apply 하면 그 결과를 다시 번역하지 않고 쓴다.
+
+번역판(중국어판 등)의 서클을 번역 배포처 대신 원작 서클로 바꾸기:
+  python meta_repair.py --circles            # 미리보기
+  python meta_repair.py --circles --apply    # 실제 수정
 """
 import argparse
 import sys
@@ -38,7 +42,53 @@ p.add_argument("--only", metavar="RJ", help="이 RJ코드 하나만 처리")
 p.add_argument("--models", action="store_true", help="Gemini에서 쓸 수 있는 모델 ID를 보여준다")
 p.add_argument("--tags", action="store_true", help="태그만 DLsite 에서 새로 받는다 (제목은 그대로)")
 p.add_argument("--retitle", action="store_true", help="번역된 제목을 OpenAI 로 다시 번역한다")
+p.add_argument("--circles", action="store_true", help="번역판의 서클을 원작 서클로 바꾼다")
 args = p.parse_args()
+
+if args.circles:
+    import time
+    import requests
+    from server import UA, apply_original
+    changed = same = failed = 0
+    for f in sorted(META_DIR.glob("*.json")):
+        if args.only and f.stem.upper() != args.only.upper():
+            continue
+        meta = load_meta(f.stem)
+        if not meta or meta.get("notfound"):
+            continue
+        try:
+            for wait in (30, 60, 120, None):
+                r = requests.get(f"https://www.dlsite.com/maniax/api/=/product.json?workno={f.stem}&locale=ko_KR",
+                                 headers={"User-Agent": UA}, timeout=15)
+                if r.status_code != 429 or wait is None:
+                    break
+                print(f"  … DLsite 가 잠시 쉬라고 해서 {wait}초 기다립니다")
+                time.sleep(wait)
+            r.raise_for_status()
+            data = r.json()
+        except (requests.RequestException, ValueError) as e:
+            print(f"  X {f.stem}  조회 실패: {e}")
+            failed += 1
+            continue
+        if not isinstance(data, list) or not data:
+            same += 1
+            continue
+        before = (meta.get("circle"), list(meta.get("cvs") or []))
+        if (data[0].get("translation_info") or {}).get("original_workno") not in (None, f.stem):
+            time.sleep(1)   # 원작을 한 번 더 조회한다
+        if apply_original(meta, data[0]):
+            changed += 1
+            print(f"  {f.stem}  서클: {before[0]} → {meta['circle']}"
+                  + (f"  / 성우 추가: {', '.join(meta['cvs'])}" if not before[1] and meta.get("cvs") else ""))
+            if args.apply:
+                save_meta(f.stem, meta)
+        else:
+            same += 1
+        time.sleep(1)   # DLsite 에 연달아 보내지 않게
+    print(f"\n바뀜 {changed} / 그대로 {same} / 실패 {failed}")
+    if changed and not args.apply:
+        print("--circles --apply 로 실행하면 실제로 수정합니다.")
+    sys.exit(0)
 
 if args.retitle:
     import json
