@@ -856,8 +856,13 @@ def keeps_numbers(src, out):
     return i == len(want)
 
 
+# 파일 이름에 못 쓰는 글자 → 생김새가 같은 전각 글자. 지우면 '도전할래?' 의 물음표 같은 게 사라진다
+FULLWIDTH = str.maketrans({"\\": "＼", "/": "／", ":": "：", "*": "＊", "?": "？",
+                           '"': "＂", "<": "＜", ">": "＞", "|": "｜"})
+
+
 def clean_name(text):
-    return re.sub(r"\s+", " ", re.sub(r'[\\/:*?"<>|]', " ", text))
+    return re.sub(r"\s+", " ", text.translate(FULLWIDTH))
 
 
 def korean_suffix(text):
