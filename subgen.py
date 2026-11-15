@@ -30,6 +30,7 @@ import threading
 import time
 import unicodedata
 from collections import Counter
+from difflib import SequenceMatcher
 from pathlib import Path
 
 import requests
@@ -47,6 +48,9 @@ OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-6-luna")
 
 CHUNK_SECONDS = 600            # 10분 단위로 잘라 전송
+# 작품 폴더에 이 파일이 있으면 좌우 채널을 따로 받아쓴다. 두 사람이 양쪽 귀에서 동시에 말하는
+# 작품용 — 섞인 채로 보내면 대사가 뭉치거나 잘못 들린다. 받아쓰기 요금은 두 배.
+STEREO_FLAG = "좌우분리.txt"
 DIRECT_UPLOAD_BYTES = 24 * 10**6   # 이보다 작은 오디오는 변환 없이 전송
 AUDIO_DIRECT_EXTS = {".mp3", ".m4a", ".wav", ".ogg", ".opus", ".flac", ".webm"}
 BATCH_SIZE = 20
@@ -376,23 +380,25 @@ def blocks_to_rows(blocks):
     return rows
 
 
-def extract_chunks(audio, folder):
+def extract_chunks(audio, folder, channel=None):
     """업로드할 (파일, 시작 초) 목록. 원본은 건드리지 않고 임시 폴더에만 만든다.
 
     작은 오디오는 그대로, 나머지는 10분 단위 모노 mp3 로 나눈다 — 어떤 길이의 작품도
-    업로드 제한에 걸리지 않게 하기 위해서다."""
-    if audio.suffix.lower() in AUDIO_DIRECT_EXTS and audio.stat().st_size < DIRECT_UPLOAD_BYTES:
+    업로드 제한에 걸리지 않게 하기 위해서다. channel 이 0(왼쪽)·1(오른쪽)이면 그 채널만 뽑는다."""
+    if channel is None and audio.suffix.lower() in AUDIO_DIRECT_EXTS and audio.stat().st_size < DIRECT_UPLOAD_BYTES:
         return [(audio, 0)]
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         return [(audio, 0)]
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    mix = ["-ac", "1"] if channel is None else ["-af", f"pan=mono|c0=c{channel}"]
+    name = "out" if channel is None else f"ch{channel}"
     r = subprocess.run([ffmpeg, "-nostdin", "-v", "error", "-y", "-i", str(audio), "-vn", "-sn", "-dn",
-                        "-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-b:a", "48k",
+                        *mix, "-ar", "16000", "-c:a", "libmp3lame", "-b:a", "48k",
                         "-f", "segment", "-segment_time", str(CHUNK_SECONDS), "-reset_timestamps", "1",
-                        str(Path(folder) / "out_%03d.mp3")],
+                        str(Path(folder) / f"{name}_%03d.mp3")],
                        capture_output=True, creationflags=flags)
-    chunks = sorted(Path(folder).glob("out_*.mp3"))
+    chunks = sorted(Path(folder).glob(f"{name}_*.mp3"))
     if r.returncode or not chunks:
         raise RuntimeError("오디오를 변환하지 못했습니다: " + r.stderr.decode("utf-8", "replace")[-200:])
     return [(p, i * CHUNK_SECONDS) for i, p in enumerate(chunks)]
@@ -445,10 +451,66 @@ def with_retry(fn, retries=2):
             time.sleep(2 * attempt)
 
 
-def transcribe(audio, keyterms=()):
+def channel_count(audio):
+    """오디오 채널 수. ffprobe 가 없거나 읽지 못하면 0."""
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return 0
+    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    try:
+        out = subprocess.run([ffprobe, "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=channels",
+                              "-of", "default=nw=1:nk=1", str(audio)],
+                             capture_output=True, text=True, timeout=30, creationflags=flags).stdout
+        return int(out.strip().splitlines()[0])
+    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
+        return 0
+
+
+def stereo_split_on(work):
+    return (Path(work) / STEREO_FLAG).is_file()
+
+
+def _norm_line(text):
+    return re.sub(r"[\s、。，,.!?！？…・ー〜~「」『』()（）-]", "", unicodedata.normalize("NFKC", text))
+
+
+def _same_line(a, b):
+    """양쪽 채널에 같은 대사가 잡힌 것인지 — 둘이 같이 말했거나 반대쪽 소리가 새어 들어온 경우."""
+    overlap = min(a["end"], b["end"]) - max(a["start"], b["start"])
+    shorter = max(0.2, min(a["end"] - a["start"], b["end"] - b["start"]))
+    if overlap < 0.5 * shorter and abs(a["start"] - b["start"]) > 0.6:
+        return False
+    na, nb = _norm_line(a["text"]), _norm_line(b["text"])
+    return bool(na and nb) and (na == nb or SequenceMatcher(None, na, nb).ratio() >= 0.8)
+
+
+def merge_channels(left, right):
+    """왼쪽·오른쪽 받아쓰기를 시간순으로 합친다. 양쪽에 같은 대사가 있으면 더 온전한(긴) 쪽만 남긴다."""
+    kept = []
+    for b in sorted(left + right, key=lambda b: b["start"]):
+        dup = next((i for i in range(len(kept) - 1, -1, -1)
+                    if kept[i]["start"] > b["start"] - 15 and kept[i]["speaker"] != b["speaker"]
+                    and _same_line(kept[i], b)), None)
+        if dup is None:
+            kept.append(b)
+        elif len(_norm_line(b["text"])) > len(_norm_line(kept[dup]["text"])):
+            kept[dup] = b
+    return sorted(kept, key=lambda b: b["start"])
+
+
+def transcribe(audio, keyterms=(), stereo=False):
+    """stereo=True 면 좌우 채널을 따로 받아써서 합친다. 화자는 채널로 정한다(왼쪽 0, 오른쪽 1)."""
     key = elevenlabs_key()
-    blocks = []
     with tempfile.TemporaryDirectory() as folder:
+        if stereo and channel_count(audio) >= 2:
+            sides = []
+            for ch in (0, 1):
+                blocks = []
+                for path, offset in extract_chunks(audio, folder, ch):
+                    blocks += with_retry(lambda: transcribe_chunk(path, offset, key, keyterms))
+                sides.append([{**b, "speaker": ch} for b in filter_hallucinations(blocks)])
+            return blocks_to_rows(merge_channels(*sides))
+        blocks = []
         for path, offset in extract_chunks(audio, folder):
             blocks += with_retry(lambda: transcribe_chunk(path, offset, key, keyterms))
     return blocks_to_rows(filter_hallucinations(blocks))
@@ -1218,7 +1280,7 @@ def make_subtitle(audio, source, source_lang, work, decode):
         rows = parse_srt(decode(source.read_bytes()))
         refine = bool(rows) and marker.is_file()
     else:
-        rows = transcribe(audio, keyterms_for(work))
+        rows = transcribe(audio, keyterms_for(work), stereo_split_on(work))
         source_lang = guess_language(rows)
         source = audio.with_name(audio.stem + (".zh.srt" if source_lang == "Chinese" else ".ja.srt"))
         # 대사가 없어도 파일을 남긴다 — 뒤 단계가 실패해도 받아쓰기 요금이 또 나가지 않게
