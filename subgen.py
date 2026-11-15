@@ -327,8 +327,9 @@ def group_words(words, offset):
             gap = w["start"] - cur["last_end"] if cur else 0
             changed = bool(cur) and cur["speaker"] is not None and speaker is not None and cur["speaker"] != speaker
             # 신음이 섞이면 한자 합성어 중간에 가짜 공백이 찍히는 경우가 있어 끊지 않는다
+            # 앞 글자는 공백(spacing)을 뺀 마지막 글자로 본다 — 끝이 공백이면 한자 검사가 늘 실패한다
             mid_word = (bool(cur) and not changed and not EL_SENTENCE_END.search(cur["text"])
-                        and bool(CJK.search(cur["text"][-1:])) and bool(CJK.search(w["text"][:1])))
+                        and bool(CJK.search(cur["text"].rstrip()[-1:])) and bool(CJK.search(w["text"][:1])))
             # gap 이 0 이면 활용형 하나가 쪼개진 것일 수 있어 길이 제한을 적용하지 않는다
             if cur and not mid_word and (changed or gap > EL_MAX_GAP
                                          or (gap > 0 and w["end"] - cur["start"] > EL_MAX_DURATION)
@@ -337,6 +338,8 @@ def group_words(words, offset):
                 cur = None
             if cur is None:
                 cur = {"start": w["start"], "end": w["end"], "text": "", "speaker": speaker, "last_end": w["end"]}
+            elif mid_word:
+                cur["text"] = cur["text"].rstrip()   # 합성어 사이에 끼어든 가짜 공백도 지운다
             cur["text"] += w["text"]
             cur["end"] = cur["last_end"] = w["end"]
         elif kind == "spacing" and cur:
