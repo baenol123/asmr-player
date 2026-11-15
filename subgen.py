@@ -1021,7 +1021,8 @@ def rename_map():
     """앱이 재생 기록·즐겨찾기를 새 경로로 옮길 때 쓴다."""
     files, works = {}, {}
     for run in read_name_log()["runs"]:
-        files.update(run["files"])
+        # files 가 빠진 기록 하나 때문에 목록 전체가 오류 나지 않게 — 그런 기록은 ops 로 대신한다
+        files.update(run.get("files") or dict(run.get("ops") or []))
         if run["old"] != run["new"]:
             works[run["old"]] = run["new"]
     return {"files": follow_renames(files), "works": follow_renames(works)}
