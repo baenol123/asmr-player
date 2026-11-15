@@ -48,9 +48,14 @@ OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-6-luna")
 
 CHUNK_SECONDS = 600            # 10분 단위로 잘라 전송
-# 작품 폴더에 이 파일이 있으면 좌우 채널을 따로 받아쓴다. 두 사람이 양쪽 귀에서 동시에 말하는
-# 작품용 — 섞인 채로 보내면 대사가 뭉치거나 잘못 들린다. 받아쓰기 요금은 두 배.
-STEREO_FLAG = "좌우분리.txt"
+# 두 사람이 양쪽 귀에서 동시에 말하는 트랙은 좌우 채널을 따로 받아쓴다 — 섞인 채로 보내면 대사가
+# 뭉치거나 잘못 들린다. 받아쓰기 요금은 두 배. 보통은 오디오를 보고 자동으로 정하고(OVERLAP_SPLIT),
+# 작품 폴더의 빈 파일로 강제할 수 있다.
+STEREO_FLAG = "좌우분리.txt"          # 있으면 이 작품은 항상 좌우 분리
+STEREO_OFF_FLAG = "좌우분리안함.txt"   # 있으면 이 작품은 절대 좌우 분리 안 함
+# 말소리 중 '양쪽에서 동시에 서로 다른 소리'인 비율. 라이브러리에서 재 보니 성우 1명 트랙은 0~0.014,
+# 성우 2명이 겹치는 본편은 0.04~0.16 이었다
+OVERLAP_SPLIT = 0.03
 DIRECT_UPLOAD_BYTES = 24 * 10**6   # 이보다 작은 오디오는 변환 없이 전송
 AUDIO_DIRECT_EXTS = {".mp3", ".m4a", ".wav", ".ogg", ".opus", ".flac", ".webm"}
 BATCH_SIZE = 20
@@ -466,8 +471,59 @@ def channel_count(audio):
         return 0
 
 
-def stereo_split_on(work):
-    return (Path(work) / STEREO_FLAG).is_file()
+def overlap_ratio(audio):
+    """말소리 중 양쪽 채널이 동시에 서로 다른 소리를 내는 비율(0~1). 재지 못하면 None.
+
+    0.25초씩 보면서, 양쪽이 비슷한 크기로 소리를 내는데 ±5ms 안에서 서로 닮지 않았으면
+    두 사람이 동시에 말하는 것으로 센다. 한 사람이 귀를 옮겨 가며 말하면 양쪽이 같은 소리라
+    시간만 어긋날 뿐 닮아 있다. 오디오를 1분씩 읽어 긴 트랙도 메모리를 적게 쓴다."""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg or not HAS_NUMPY:
+        return None
+    win, lag = 2000, 40   # 8000Hz 기준 0.25초, 5ms
+    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    proc = subprocess.Popen([ffmpeg, "-nostdin", "-v", "error", "-i", str(audio), "-vn", "-ac", "2", "-ar", "8000",
+                             "-f", "s16le", "-"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, creationflags=flags)
+    rms_l, rms_r, sims = [], [], []
+    try:
+        while True:
+            buf = proc.stdout.read(win * 4 * 240)   # 60초
+            usable = len(buf) // (win * 4) * (win * 4)
+            if not usable:
+                break
+            x = np.frombuffer(buf[:usable], np.int16).astype(np.float32).reshape(-1, win, 2)
+            rms_l.append(np.sqrt((x[:, :, 0] ** 2).mean(1)))
+            rms_r.append(np.sqrt((x[:, :, 1] ** 2).mean(1)))
+            a = x[:, :, 0] - x[:, :, 0].mean(1, keepdims=True)
+            b = x[:, :, 1] - x[:, :, 1].mean(1, keepdims=True)
+            cc = np.fft.irfft(np.fft.rfft(a, 2 * win, axis=1) * np.conj(np.fft.rfft(b, 2 * win, axis=1)), axis=1)
+            peak = np.concatenate([cc[:, -lag:], cc[:, :lag + 1]], axis=1).max(1)
+            sims.append(peak / (np.sqrt((a ** 2).sum(1) * (b ** 2).sum(1)) + 1e-9))
+    finally:
+        proc.stdout.close()
+        proc.wait()
+    if not rms_l:
+        return None
+    rl, rr, sim = np.concatenate(rms_l), np.concatenate(rms_r), np.concatenate(sims)
+    loud = np.maximum(rl, rr)
+    floor = np.percentile(loud, 30) * 2 + 30   # 조용한 구간을 뺀 말소리 창만 본다
+    voiced = (loud > floor).sum()
+    both = (rl > floor) & (rr > floor) & (np.abs(20 * np.log10((rl + 1) / (rr + 1))) < 12)
+    return float((both & (sim < 0.35)).sum() / max(voiced, 1))
+
+
+def stereo_split_on(work, audio=None):
+    """이 트랙을 좌우 나눠 받아쓸지와 그 이유. 폴더의 강제 파일이 먼저, 없으면 오디오를 재서 정한다."""
+    if (Path(work) / STEREO_OFF_FLAG).is_file():
+        return False, f"{STEREO_OFF_FLAG} 있음"
+    if (Path(work) / STEREO_FLAG).is_file():
+        return True, f"{STEREO_FLAG} 있음"
+    if audio is None or channel_count(audio) < 2:
+        return False, "모노"
+    ratio = overlap_ratio(audio)
+    if ratio is None:
+        return False, "잴 수 없음"
+    return ratio >= OVERLAP_SPLIT, f"두 목소리 겹침 {ratio:.1%}"
 
 
 def _norm_line(text):
@@ -1280,7 +1336,10 @@ def make_subtitle(audio, source, source_lang, work, decode):
         rows = parse_srt(decode(source.read_bytes()))
         refine = bool(rows) and marker.is_file()
     else:
-        rows = transcribe(audio, keyterms_for(work), stereo_split_on(work))
+        stereo, why = stereo_split_on(work, audio)
+        if stereo:
+            log(f"좌우 채널을 나눠 받아씁니다 ({why}): {audio.name}")
+        rows = transcribe(audio, keyterms_for(work), stereo)
         source_lang = guess_language(rows)
         source = audio.with_name(audio.stem + (".zh.srt" if source_lang == "Chinese" else ".ja.srt"))
         # 대사가 없어도 파일을 남긴다 — 뒤 단계가 실패해도 받아쓰기 요금이 또 나가지 않게
