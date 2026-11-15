@@ -179,13 +179,32 @@ button { font: inherit; color: inherit; background: none; border: none; padding:
 }
 .folder-h .fd, #crumb .fd { margin-left: auto; padding-left: 8px; flex-shrink: 0; color: var(--dim3); font-weight: 400; font-variant-numeric: tabular-nums; }
 /* ── 탐색 모드 ── */
+/* 지금 있는 폴더: 뒤로 버튼 + 폴더 이름(크게) + 상위 경로(작게) */
 #crumb {
-  display: flex; align-items: center; gap: 8px; padding: 8px 0 4px;
-  font-size: 12px; color: var(--fg-dim); word-break: break-all;
+  display: flex; align-items: center; gap: 12px; padding: 10px 0 12px;
+  border-bottom: 1px solid var(--line);
 }
-#exp-up { width: 32px; height: 32px; border: 1px solid var(--line); border-radius: 8px; flex-shrink: 0; color: var(--fg-dim); }
-#exp-up:disabled { opacity: .3; }
-.track.dir .n { color: var(--fg); font-weight: 500; }
+#exp-up {
+  width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0;
+  background: var(--bg3); color: var(--fg);
+}
+#exp-up:disabled { visibility: hidden; width: 0; margin-right: -12px; }
+#crumb .cw { flex: 1; min-width: 0; }
+#crumb .cn { font-size: 15px; font-weight: 600; color: var(--fg); line-height: 1.35; overflow: hidden; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+#crumb .cp { font-size: 12px; color: var(--dim3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+#crumb .cp:empty { display: none; }
+#crumb .fd { font-size: 12px; }
+/* 폴더와 트랙 사이 작은 제목 */
+.tree-sec { font-size: 11px; font-weight: 500; color: var(--dim3); padding: 16px 0 4px; letter-spacing: .02em; }
+/* 폴더 줄: 색 있는 아이콘 칸 + 굵은 이름 + 트랙 수·길이 */
+.track.dir .no {
+  width: 32px; height: 32px; border-radius: 9px; background: var(--bg3);
+  display: flex; align-items: center; justify-content: center;
+}
+.track.dir .no svg.i { width: 16px; height: 16px; color: var(--accent); margin: 0; }
+.track.dir .n { color: var(--fg); font-weight: 600; }
+.track.dir .sz svg.i { width: 16px; height: 16px; margin-left: auto; }
 .track .no svg.i { width: 16px; height: 16px; margin: 0 auto; color: var(--dim3); }
 .track.other .n { color: var(--fg-dim); }
 /* ── 이미지·텍스트 뷰어 ── */
@@ -207,7 +226,9 @@ button { font: inherit; color: inherit; background: none; border: none; padding:
 .track .no { width: 24px; text-align: center; color: var(--dim3); font-size: 13px; flex-shrink: 0; font-variant-numeric: tabular-nums; }
 .track.playing .no { color: var(--accent); }
 .track .tn { flex: 1; min-width: 0; }
-.track .tn .n { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 긴 트랙·폴더 이름은 두 줄까지 보여주고 그 뒤만 줄인다 */
+.track .tn .n { font-size: 15px; line-height: 1.35; overflow: hidden; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .track.playing .tn .n { color: var(--accent); font-weight: 500; }
 .track.playing .no svg.i { color: var(--accent); }
 .track .tn .f { font-size: 12px; color: var(--dim3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
@@ -781,6 +802,14 @@ async function fillDurations(w) {
     const s = folderSum(el.dataset.f);
     el.querySelector(".fd").textContent = s ? fmt(s) : "";
   });
+  document.querySelectorAll("#d-tracks .track.dir").forEach(el => {
+    const full = el.dataset.full, s = w.tracks.reduce((a, t) => {
+      const f = t.folder || "";
+      return a + (f === full || f.startsWith(full + "/") ? (w._dur[t.path] || 0) : 0);
+    }, 0);
+    const dd = el.querySelector(".dd");
+    if (dd) dd.textContent = s ? " · " + fmt(s) : "";
+  });
   const crumb = document.querySelector("#crumb .fd");
   if (crumb) { const s = folderSum(expPath); crumb.textContent = s ? fmt(s) : ""; }
   // 작품 전체: 같은 트랙이 여러 벌(MP3·WAV, SE 판 등)이면 한 번만 센 길이
@@ -816,11 +845,24 @@ function renderTree(w) {
   const nat = s => s.split(/(\d+)/).map(x => /^\d+$/.test(x) ? x.padStart(9, "0") : x.toLowerCase()).join("");
   files.sort((a, b) => nat(a.name) < nat(b.name) ? -1 : 1);
 
-  let html = `<div id="crumb"><button id="exp-up" ${expPath ? "" : "disabled"}>${ic("corner-left-up")}</button><span>/${esc(expPath)}</span><span class="fd"></span></div>`;
-  html += [...dirs].sort((a, b) => nat(a) < nat(b) ? -1 : 1).map(d =>
-    `<div class="track dir" data-d="${esc(d)}"><span class="no">${ic("folder")}</span><div class="tn"><div class="n">${esc(d)}</div></div><span class="sz">${ic("chevron-right")}</span></div>`).join("");
+  const parts = expPath ? expPath.split("/") : [];
+  let html = `<div id="crumb"><button id="exp-up" aria-label="상위 폴더" ${expPath ? "" : "disabled"}>${ic("arrow-left")}</button>
+    <div class="cw"><div class="cn">${esc(parts.length ? parts[parts.length - 1] : "작품 폴더")}</div><div class="cp">${esc(parts.slice(0, -1).join(" / "))}</div></div>
+    <span class="fd"></span></div>`;
+  // 폴더 줄 아래에 그 안(하위 폴더 포함)의 트랙 수를 적는다. 길이는 fillDurations 가 덧붙인다
+  const under = d => (prefix + d);
+  const countIn = full => w.tracks.filter(t => { const f = t.folder || ""; return f === full || f.startsWith(full + "/"); }).length;
+  const sortedDirs = [...dirs].sort((a, b) => nat(a) < nat(b) ? -1 : 1);
+  if (sortedDirs.length && files.length) html += `<div class="tree-sec">폴더</div>`;
+  html += sortedDirs.map(d => {
+    const n = countIn(under(d));
+    return `<div class="track dir" data-d="${esc(d)}" data-full="${esc(under(d))}"><span class="no">${ic("folder", true)}</span><div class="tn"><div class="n">${esc(d)}</div><div class="f">${n ? `트랙 ${n}개` : "트랙 없음"}<span class="dd"></span></div></div><span class="sz">${ic("chevron-right")}</span></div>`;
+  }).join("");
+  if (sortedDirs.length && files.length)
+    html += `<div class="tree-sec">${files.some(f => f.kind === "audio") ? "트랙" : "파일"}</div>`;
+  let no = 0;
   html += files.map(it => it.kind === "audio"
-    ? `<div class="track" data-i="${it.ti}"><span class="no">${ic("play")}</span><div class="tn"><div class="n">${esc(it.name)}</div></div>${ccBadge(it)}<span class="sz">${(it.size/1048576).toFixed(0)}MB</span></div>`
+    ? `<div class="track" data-i="${it.ti}"><span class="no">${++no}</span><div class="tn"><div class="n">${esc(it.name)}</div></div>${ccBadge(it)}<span class="sz">${(it.size/1048576).toFixed(0)}MB</span></div>`
     : `<div class="track other" data-p="${esc(it.path)}" data-k="${it.kind}"><span class="no">${ic(it.kind === "image" ? "image" : "file-text")}</span><div class="tn"><div class="n">${esc(it.name)}</div></div></div>`).join("");
   $("d-tracks").innerHTML = html;
 
