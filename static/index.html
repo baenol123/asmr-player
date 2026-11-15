@@ -385,7 +385,7 @@ body.immersive #p-cue { flex: 1; max-height: none; line-height: 1.7; }
 #tr-head b { flex: 1; font-size: 16px; font-weight: 600; }
 #tr-head button { width: 40px; height: 40px; color: var(--fg-dim); }
 #tr-list { flex: 1; overflow-y: auto; padding: 0 18px; }
-.cue-line { padding: 9px 10px; border-radius: 10px; font-size: 15px; line-height: 1.55; color: var(--fg-dim); cursor: pointer; }
+.cue-line { padding: 9px 10px; border-radius: 10px; font-size: 15px; line-height: 1.55; color: var(--fg-dim); cursor: pointer; white-space: pre-line; }
 .cue-line .ts { font-size: 11px; color: var(--dim3); margin-right: 8px; font-variant-numeric: tabular-nums; }
 /* .prev: 대사 사이 구간 — 방금 끝난 줄의 강조를 그대로 남겨 위치를 잃지 않게 */
 .cue-line.cur, .cue-line.prev { background: var(--bg3); color: var(--cue-color, var(--fg)); }
@@ -927,7 +927,12 @@ function playTrack(w, i, openPlayer, q) {
   audio.playbackRate = SPEEDS[speedIdx];
   const saved = +localStorage.getItem("pos:" + t.path) || 0;
   audio.currentTime = 0;
-  audio.play().then(() => { if (saved > 5 && saved < (audio.duration || 1e9) - 10) audio.currentTime = saved; });
+  // 이어듣기 위치는 재생 전에 옮긴다 — play() 뒤에 옮기면 0초부터 잠깐 소리가 난다
+  if (saved > 5)
+    audio.addEventListener("loadedmetadata", () => {
+      if (saved < (audio.duration || 1e9) - 10) audio.currentTime = saved;
+    }, { once: true });
+  audio.play().catch(() => {});   // 자동재생이 막혀도 재생 버튼으로 시작할 수 있다
   loadSrt(t);
   $("mini").classList.add("on");
   $("mini-title").textContent = t.name;

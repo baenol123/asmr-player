@@ -13,7 +13,7 @@ if errorlevel 1 (
 python -c "import flask, requests, numpy" 2> nul
 if errorlevel 1 (
     echo 필요한 패키지를 설치합니다...
-    pip install -r requirements.txt
+    python -m pip install -r requirements.txt
 )
 
 python server.py

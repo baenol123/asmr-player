@@ -110,11 +110,13 @@ openai_key.txt         교정·번역·이름 번역 (OPENAI_MODEL, 기본 gpt-6
 DLsite에서 받아온 일본어 제목을 한국어로 자동 번역합니다. **키가 없어도 앱은 정상
 동작하며**, 제목만 일본어 원문으로 남습니다(서버 창에 안내가 뜹니다).
 
-키를 넣으려면 아래 중 하나를 앱 폴더에 텍스트 파일로 저장하세요. 둘 다 있으면
-Gemini를 먼저 쓰고 실패하면 DeepL로 넘어갑니다.
+키를 넣으려면 아래 중 하나 이상을 앱 폴더에 텍스트 파일로 저장하세요. 여러 개 있으면
+OpenAI → Gemini → DeepL 순으로 쓰고, 앞에서 실패한 제목만 다음으로 넘깁니다.
+OpenAI 로 번역할 때만 용어집·교정치환·번역지시가 적용됩니다.
 
 | 파일명 | 발급처 | 비고 |
 |---|---|---|
+| `openai_key.txt` | [OpenAI Platform](https://platform.openai.com/api-keys) | 자막 생성용 키와 같은 파일 |
 | `gemini_key.txt` | [Google AI Studio](https://aistudio.google.com/apikey) | 카드 등록 불필요 |
 | `deepl_key.txt` | [DeepL API Free](https://www.deepl.com/pro-api) | 월 50만 자, 카드 등록 필요 |
 

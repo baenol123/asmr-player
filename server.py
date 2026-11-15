@@ -58,6 +58,8 @@ RETRY_AFTER_FETCH_ERROR = 6 * 3600
 RETRY_AFTER_NOTFOUND = 30 * 86400
 # 번역판의 원작 조회가 실패(429 등)했을 때 다시 물어보기까지의 간격
 RETRY_AFTER_CIRCLE_ERROR = 600
+# 제목 번역이 실패(거절·한도 등)했을 때 다시 시도하기까지 — 앱을 열 때마다 유료 번역을 부르지 않게
+RETRY_AFTER_TITLE_ERROR = 6 * 3600
 
 app = Flask(__name__, static_folder=str(BASE / "static"), static_url_path="/static")
 app.json.ensure_ascii = False   # 한글을 \uXXXX 로 늘리지 않는다
@@ -198,6 +200,13 @@ def needs_translation(meta):
     return meta.get("title_orig") is None and bool(JA_CHARS.search(meta.get("title") or ""))
 
 
+def needs_title_retry(meta):
+    """번역이 안 된 제목이고, 마지막 시도에서 충분히 시간이 지났는지."""
+    if not needs_translation(meta):
+        return False
+    return time.time() - (meta.get("title_checked_at") or 0) > RETRY_AFTER_TITLE_ERROR
+
+
 def needs_circle_retry(meta):
     """번역판인데 원작 조회가 실패해 서클이 번역 배포처로 남아 있고, 다시 물어볼 때가 됐는지."""
     if not meta or not meta.get("circle_pending"):
@@ -206,14 +215,15 @@ def needs_circle_retry(meta):
 
 
 def repair_title(meta):
-    """번역만 실패해 원문이 남은 캐시를 다시 번역해 고친다. 고쳐졌으면 True."""
+    """번역만 실패해 원문이 남은 캐시를 다시 번역해 고친다. 메타가 바뀌었으면(실패 시각 기록 포함) True."""
     orig = meta.get("title_orig") or meta.get("title")
     if not orig or not JA_CHARS.search(orig):
         meta.pop("title_pending", None)  # 번역할 게 없음 — 표시만 지운다
         return True
     ko = translate_ko(orig)
     if not ko:
-        return False
+        meta["title_checked_at"] = time.time()   # 실패한 시각을 남겨 몇 시간 동안은 다시 부르지 않는다
+        return True
     meta["title"] = ko
     meta["title_orig"] = orig
     meta.pop("title_pending", None)
@@ -373,7 +383,7 @@ def api_works():
             # 제목 번역이 안 된 상태 - 프런트가 /api/meta 를 다시 불러 고치게 한다
             "titlePending": needs_translation(meta),
             # 제목 번역이나 원작 서클 조회가 남아 있음 - 프런트가 /api/meta 를 다시 부른다
-            "metaPending": needs_translation(meta) or needs_circle_retry(meta),
+            "metaPending": needs_title_retry(meta) or needs_circle_retry(meta),
             "hasCover": bool(local_cover) or (meta or {}).get("image") is not None,
             "localCover": local_cover,
             "tracks": tracks,
@@ -393,7 +403,7 @@ def api_meta(rj):
         save_meta(rj, meta)
     else:
         dirty = False
-        if needs_translation(meta):
+        if needs_title_retry(meta):
             # DLsite를 다시 부를 필요 없이 번역만 재시도한다
             dirty = repair_title(meta)
         if needs_circle_retry(meta):
@@ -692,8 +702,9 @@ def fetch_meta(rj):
     }
     apply_original(meta, item)
     if needs_tr and not title_ko:
-        # 메타는 멀쩡하고 번역만 실패 — 다음 조회 때 번역만 다시 시도한다
+        # 메타는 멀쩡하고 번역만 실패 — 몇 시간 뒤 조회 때 번역만 다시 시도한다
         meta["title_pending"] = True
+        meta["title_checked_at"] = time.time()
     return meta
 
 
@@ -779,6 +790,9 @@ def unique_total(tracks, durations):
         if d is None:
             continue
         key = unicodedata.normalize("NFKC", subgen.parse_variant_name(t["name"])[0]).lower().strip(" _-")
+        if not re.search(r"[^\W\d_]", key):
+            # '01' 처럼 번호뿐인 이름은 disc1/01 과 disc2/01 이 다른 트랙일 수 있다 — 폴더까지 같아야 같은 트랙
+            key = (t.get("folder") or "") + "/" + key
         if not any(key == k and abs(d - d2) <= 1.5 for k, d2 in kept):
             kept.append((key, d))
     return round(sum(d for _, d in kept), 1)

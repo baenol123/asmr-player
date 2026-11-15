@@ -708,9 +708,10 @@ def translate_batch(batch, opts, budget, retried=False):
     except FatalApiError:
         raise
     except (requests.RequestException, RefusalError, ValueError, KeyError, IndexError, TypeError, AttributeError) as e:
-        if isinstance(e, requests.ConnectionError):
-            # 연결 끊김은 배치 문제가 아니다. 한 번 더 해 보고 그래도 안 되면 위로 올려 보낸다 —
-            # 여기서 실패 줄로 처리하면 '[수동 번역 필요]' 투성이 자막이 완성본으로 저장된다
+        if isinstance(e, (requests.ConnectionError, requests.Timeout)):
+            # 연결 끊김·응답 지연은 배치 문제가 아니다. 한 번 더 해 보고 그래도 안 되면 위로 올려 보낸다 —
+            # 여기서 실패 줄로 처리하면 '[수동 번역 필요]' 투성이 자막이 완성본으로 저장되고,
+            # 지연을 배치 탓으로 보고 쪼개 보내면 느린 서버에 요청을 수십 번 반복한다
             if retried:
                 raise
             time.sleep(5)
