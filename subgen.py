@@ -1473,6 +1473,10 @@ def start(root, scan, signature, decode):
 
 
 if __name__ == "__main__":
+    try:   # 한국어 윈도우 콘솔(cp949)에서도, 다른 터미널에서도 한글이 깨지지 않게
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError):
+        pass
     if len(sys.argv) == 3 and sys.argv[1] == "undo":
         from server import WORKS_DIR
         count, missing, error = undo_names(WORKS_DIR, sys.argv[2])
