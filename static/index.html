@@ -757,6 +757,23 @@ function renderTracks(w) {
   document.querySelectorAll(".track").forEach(el =>
     el.onclick = () => playTrack(w, +el.dataset.i, true));
   markPlaying();
+  fillDurations(w);
+}
+
+/* 트랙 재생 시간: 작품을 열 때 서버에 한 번 묻고(서버가 기억해 둔다) 용량 자리에 보여준다 */
+async function fillDurations(w) {
+  if (!w._dur) {
+    try { w._dur = await (await fetch(`/api/durations/${enc(w.id)}`)).json(); }
+    catch (e) { return; }   // 못 받으면 용량(MB) 표시를 그대로 둔다
+  }
+  if (curWork !== w) return;
+  document.querySelectorAll("#d-tracks .track[data-i]").forEach(el => {
+    const t = w.tracks[+el.dataset.i], d = t && w._dur[t.path];
+    const sz = el.querySelector(".sz");
+    if (d != null && sz) { sz.textContent = fmt(d); sz.title = (t.size/1048576).toFixed(0) + "MB"; }
+  });
+  const total = w.tracks.reduce((s, t) => s + (w._dur[t.path] || 0), 0);
+  if (total) $("d-count").textContent = `${w.tracks.length}개 트랙 · ${fmt(total)}`;
 }
 
 function trackRow(t, i, showPath) {
@@ -805,6 +822,7 @@ function renderTree(w) {
   document.querySelectorAll(".track.other").forEach(el =>
     el.onclick = () => openViewer(el.dataset.p, el.dataset.k));
   markPlaying();
+  fillDurations(w);
 }
 
 $("d-folders").onclick = () => {

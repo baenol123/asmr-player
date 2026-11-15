@@ -15,11 +15,15 @@ import gzip
 import json
 import os
 import re
+import shutil
 import socket
+import subprocess
+import sys
 import threading
 import time
 import unicodedata
 import zlib
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import requests
@@ -729,6 +733,83 @@ def api_cover(work_id):
         if local_cover:
             return send_file(safe_resolve(local_cover), conditional=True)
     abort(404)
+
+
+# ── 트랙 재생 시간 ──────────────────────────────────────────────────
+# ffprobe 로 한 번 재 두고 cache/durations.json 에 남긴다. 파일 크기·수정 시각이 바뀌면 다시 잰다.
+DURATION_FILE = CACHE_DIR / "durations.json"
+_dur_lock = threading.Lock()
+_dur_cache = None
+
+
+def _durations():
+    global _dur_cache
+    if _dur_cache is None:
+        try:
+            _dur_cache = json.loads(DURATION_FILE.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            _dur_cache = {}
+    return _dur_cache
+
+
+def probe_duration(path):
+    """재생 시간(초). ffprobe 가 없거나 읽지 못하면 None."""
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return None
+    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    try:
+        out = subprocess.run([ffprobe, "-v", "error", "-show_entries", "format=duration",
+                              "-of", "default=nw=1:nk=1", str(path)],
+                             capture_output=True, text=True, timeout=30, creationflags=flags).stdout
+        return round(float(out.strip()), 1)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+@app.route("/api/durations/<path:work_id>")
+def api_durations(work_id):
+    """작품 폴더 안 트랙들의 재생 시간 {경로: 초}. 처음 여는 작품만 잠깐 걸린다."""
+    folder = (WORKS_DIR / work_id).resolve()
+    try:
+        folder.relative_to(WORKS_DIR.resolve())
+    except ValueError:
+        abort(404)
+    if not folder.is_dir():
+        abort(404)
+    out, todo = {}, []
+    with _dur_lock:
+        cache = _durations()
+        for t in scan_work_dir(folder)[0]:
+            f = WORKS_DIR / t["path"]
+            try:
+                st = f.stat()
+            except OSError:
+                continue
+            sig = [st.st_size, round(st.st_mtime)]
+            hit = cache.get(t["path"])
+            if hit and hit[:2] == sig:
+                out[t["path"]] = hit[2]
+            else:
+                todo.append((t["path"], f, sig))
+    if todo:
+        with ThreadPoolExecutor(4) as ex:
+            got = list(ex.map(lambda x: probe_duration(x[1]), todo))
+        with _dur_lock:
+            cache = _durations()
+            for (path, _f, sig), d in zip(todo, got):
+                if d is not None:
+                    cache[path] = sig + [d]
+                    out[path] = d
+            tmp = DURATION_FILE.with_name(DURATION_FILE.name + ".tmp")
+            for _ in range(10):
+                try:
+                    tmp.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+                    os.replace(tmp, DURATION_FILE)
+                    break
+                except PermissionError:
+                    time.sleep(0.05)   # 백신·검색 색인이 잠깐 열어 둔 경우. 끝내 못 써도 다음에 다시 잰다
+    return jsonify(out)
 
 
 @app.route("/api/audio/<path:relpath>")
