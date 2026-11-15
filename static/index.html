@@ -177,6 +177,7 @@ button { font: inherit; color: inherit; background: none; border: none; padding:
 }
 .folder-h svg.i { width: 14px; height: 14px; color: var(--dim3);
 }
+.folder-h .fd, #crumb .fd { margin-left: auto; padding-left: 8px; flex-shrink: 0; color: var(--dim3); font-weight: 400; font-variant-numeric: tabular-nums; }
 /* ── 탐색 모드 ── */
 #crumb {
   display: flex; align-items: center; gap: 8px; padding: 8px 0 4px;
@@ -748,7 +749,7 @@ function renderTracks(w) {
   let html = "", last = null;
   w.tracks.forEach((t, i) => {
     if (grouped && t.folder !== last) {
-      html += `<div class="folder-h">${ic("folder")}${esc(t.folder || "(루트)")}</div>`;
+      html += `<div class="folder-h" data-f="${esc(t.folder || "")}">${ic("folder")}${esc(t.folder || "(루트)")}<span class="fd"></span></div>`;
       last = t.folder;
     }
     html += trackRow(t, i, !grouped);
@@ -763,8 +764,10 @@ function renderTracks(w) {
 /* 트랙 재생 시간: 작품을 열 때 서버에 한 번 묻고(서버가 기억해 둔다) 용량 자리에 보여준다 */
 async function fillDurations(w) {
   if (!w._dur) {
-    try { w._dur = await (await fetch(`/api/durations/${enc(w.id)}`)).json(); }
-    catch (e) { return; }   // 못 받으면 용량(MB) 표시를 그대로 둔다
+    try {
+      const r = await (await fetch(`/api/durations/${enc(w.id)}`)).json();
+      w._dur = r.tracks || {}; w._durTotal = r.total || 0; w._durRaw = r.raw || 0;
+    } catch (e) { return; }   // 못 받으면 용량(MB) 표시를 그대로 둔다
   }
   if (curWork !== w) return;
   document.querySelectorAll("#d-tracks .track[data-i]").forEach(el => {
@@ -772,8 +775,19 @@ async function fillDurations(w) {
     const sz = el.querySelector(".sz");
     if (d != null && sz) { sz.textContent = fmt(d); sz.title = (t.size/1048576).toFixed(0) + "MB"; }
   });
-  const total = w.tracks.reduce((s, t) => s + (w._dur[t.path] || 0), 0);
-  if (total) $("d-count").textContent = `${w.tracks.length}개 트랙 · ${fmt(total)}`;
+  // 폴더 하나의 합 (그 폴더에 바로 들어 있는 트랙만)
+  const folderSum = f => w.tracks.reduce((s, t) => s + ((t.folder || "") === f ? (w._dur[t.path] || 0) : 0), 0);
+  document.querySelectorAll("#d-tracks .folder-h").forEach(el => {
+    const s = folderSum(el.dataset.f);
+    el.querySelector(".fd").textContent = s ? fmt(s) : "";
+  });
+  const crumb = document.querySelector("#crumb .fd");
+  if (crumb) { const s = folderSum(expPath); crumb.textContent = s ? fmt(s) : ""; }
+  // 작품 전체: 같은 트랙이 여러 벌(MP3·WAV, SE 판 등)이면 한 번만 센 길이
+  if (w._durTotal) {
+    const dup = w._durRaw - w._durTotal > 30;
+    $("d-count").textContent = `${w.tracks.length}개 트랙 · ${fmt(w._durTotal)}${dup ? " (중복 제외)" : ""}`;
+  }
 }
 
 function trackRow(t, i, showPath) {
@@ -802,7 +816,7 @@ function renderTree(w) {
   const nat = s => s.split(/(\d+)/).map(x => /^\d+$/.test(x) ? x.padStart(9, "0") : x.toLowerCase()).join("");
   files.sort((a, b) => nat(a.name) < nat(b.name) ? -1 : 1);
 
-  let html = `<div id="crumb"><button id="exp-up" ${expPath ? "" : "disabled"}>${ic("corner-left-up")}</button><span>/${esc(expPath)}</span></div>`;
+  let html = `<div id="crumb"><button id="exp-up" ${expPath ? "" : "disabled"}>${ic("corner-left-up")}</button><span>/${esc(expPath)}</span><span class="fd"></span></div>`;
   html += [...dirs].sort((a, b) => nat(a) < nat(b) ? -1 : 1).map(d =>
     `<div class="track dir" data-d="${esc(d)}"><span class="no">${ic("folder")}</span><div class="tn"><div class="n">${esc(d)}</div></div><span class="sz">${ic("chevron-right")}</span></div>`).join("");
   html += files.map(it => it.kind === "audio"

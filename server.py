@@ -767,9 +767,26 @@ def probe_duration(path):
         return None
 
 
+def unique_total(tracks, durations):
+    """같은 내용이 여러 번 들어 있는 작품의 실제 길이.
+
+    MP3판·WAV판, SE 있음·없음 판, '재생 목록용' 복사 폴더처럼 같은 트랙이 여러 벌 있으면 한 번만 센다.
+    SE 표시를 뗀 이름이 같고 길이가 1.5초 안쪽으로 같으면 같은 트랙으로 본다.
+    (핸드잡 버전)/(수음 버전)처럼 이름이 다른 건 내용도 다르므로 따로 센다."""
+    kept = []
+    for t in tracks:
+        d = durations.get(t["path"])
+        if d is None:
+            continue
+        key = unicodedata.normalize("NFKC", subgen.parse_variant_name(t["name"])[0]).lower().strip(" _-")
+        if not any(key == k and abs(d - d2) <= 1.5 for k, d2 in kept):
+            kept.append((key, d))
+    return round(sum(d for _, d in kept), 1)
+
+
 @app.route("/api/durations/<path:work_id>")
 def api_durations(work_id):
-    """작품 폴더 안 트랙들의 재생 시간 {경로: 초}. 처음 여는 작품만 잠깐 걸린다."""
+    """{"tracks": {경로: 초}, "total": 중복 뺀 길이, "raw": 단순 합}. 처음 여는 작품만 잠깐 걸린다."""
     folder = (WORKS_DIR / work_id).resolve()
     try:
         folder.relative_to(WORKS_DIR.resolve())
@@ -778,9 +795,10 @@ def api_durations(work_id):
     if not folder.is_dir():
         abort(404)
     out, todo = {}, []
+    tracks = scan_work_dir(folder)[0]
     with _dur_lock:
         cache = _durations()
-        for t in scan_work_dir(folder)[0]:
+        for t in tracks:
             f = WORKS_DIR / t["path"]
             try:
                 st = f.stat()
@@ -809,7 +827,7 @@ def api_durations(work_id):
                     break
                 except PermissionError:
                     time.sleep(0.05)   # 백신·검색 색인이 잠깐 열어 둔 경우. 끝내 못 써도 다음에 다시 잰다
-    return jsonify(out)
+    return jsonify(tracks=out, total=unique_total(tracks, out), raw=round(sum(out.values()), 1))
 
 
 @app.route("/api/audio/<path:relpath>")
