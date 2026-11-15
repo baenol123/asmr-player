@@ -982,8 +982,22 @@ def write_name_log(log):
     f = name_log_file()
     f.parent.mkdir(parents=True, exist_ok=True)
     tmp = f.with_name(f.name + ".tmp")
-    tmp.write_text(json.dumps(log, ensure_ascii=False), encoding="utf-8")
+    # 사람이 열어 볼 일이 있는 파일이라 줄을 나눠 저장한다
+    tmp.write_text(json.dumps(log, ensure_ascii=False, indent=1), encoding="utf-8")
     os.replace(tmp, f)
+
+
+def retry_names(key):
+    """작품을 '이름 확인 끝남'·'자동 번역 안 함' 목록에서 빼서, 다음 감시 때 이름 번역을 다시 시도하게 한다.
+    지운 항목이 있었으면 True."""
+    key = work_key(key)
+    log = read_name_log()
+    found = log["checked"].pop(key, None) is not None
+    if key in log["skip"]:
+        log["skip"].remove(key)
+        found = True
+    write_name_log(log)
+    return found
 
 
 def work_key(name):
@@ -1042,13 +1056,15 @@ def rename_work(folder, root):
     titles = list(dict.fromkeys(titles))
     done = translate_titles(titles, folder) if titles else {}
 
-    ops, problems, skipped = [], [], 0
+    ops, problems = [], []
+    skipped = {"names": 0, "files": 0, "dirs": 0}   # 알림은 이름(묶음) 수로 센다 — 트랙 하나가 파일 여러 개다
     moved = {rel(f): rel(f) for f in all_files}
     try:
         for (cur, core), members in groups.items():
             new = build_name(parts[core], done)
             if not new:
-                skipped += len(members)
+                skipped["names"] += 1
+                skipped["files"] += len(members)
                 continue
             pairs = [(Path(cur) / name, Path(cur) / (new + tail)) for name, tail in members]
             if any(d.exists() or len(str(d)) > MAX_PATH_LENGTH for _, d in pairs):
@@ -1073,7 +1089,8 @@ def rename_work(folder, root):
             text = done.get(masked) if FOREIGN.search(masked) else masked
             new = restore_symbols(text, marks)[:MAX_FILE_NAME].strip().rstrip(" .") if text else ""
             if not new or not keeps_numbers(d.name, new):
-                skipped += 1
+                skipped["names"] += 1
+                skipped["dirs"] += 1
                 continue
             target = d.with_name(new)
             if target.exists():
@@ -1097,7 +1114,8 @@ def rename_work(folder, root):
             keeps_rj = work_key(name) == work_key(folder.name) if name else False
             target = folder.with_name(name) if name else None
             if not keeps_rj or not keeps_numbers(folder.name, name):
-                skipped += 1
+                skipped["names"] += 1
+                skipped["dirs"] += 1
             elif target.exists():
                 problems.append(f"같은 이름의 폴더가 있어 건너뜀: {folder.name}")
             else:
@@ -1117,8 +1135,9 @@ def rename_work(folder, root):
                                 "time": time.time(), "ops": ops,
                                 "files": {k: v for k, v in moved.items() if k != v}})
             write_name_log(log)
-    if skipped:
-        problems.append(f"번역하지 못해 원래 이름을 유지: {skipped}개")
+    if skipped["names"]:
+        detail = [f"파일 {skipped['files']}개"] * bool(skipped["files"]) + [f"폴더 {skipped['dirs']}개"] * bool(skipped["dirs"])
+        problems.append(f"번역하지 못해 원래 이름을 유지: {skipped['names']}개 ({', '.join(detail)})")
     return {k: v for k, v in moved.items() if k != v}, problems
 
 
@@ -1462,5 +1481,11 @@ if __name__ == "__main__":
             print(f"  없어서 건너뜀: {path}")
         if error:
             sys.exit(f"중단: {error}\n원인을 해결한 뒤 같은 명령을 다시 실행하면 남은 것부터 이어서 되돌립니다.")
+    elif len(sys.argv) == 3 and sys.argv[1] == "retry":
+        if retry_names(sys.argv[2]):
+            print("이름 번역을 다시 시도하도록 표시했습니다. 서버를 다시 켜면 2분쯤 뒤에 시도합니다.")
+        else:
+            print("기록에 없는 작품입니다. 아직 확인 전이면 서버가 알아서 시도합니다.")
     else:
-        sys.exit("사용법: python subgen.py undo RJ01234567")
+        sys.exit("사용법:\n  python subgen.py undo RJ01234567    이름 번역 되돌리기\n"
+                 "  python subgen.py retry RJ01234567   이름 번역 다시 시도")
