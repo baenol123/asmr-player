@@ -1009,6 +1009,16 @@ audio.onended = () => {
     if (curIdx !== from) showToast(queue[curIdx].name);  // 자동 전환만 알린다
   }
 };
+// 자막은 화면이 갱신될 때마다 맞춘다. timeupdate 는 초당 4번 정도라 자막이 최대 0.25초 늦게 떴다
+let cueRaf = 0;
+function cueLoop() {
+  updateCue(audio.currentTime);
+  cueRaf = audio.paused || document.hidden ? 0 : requestAnimationFrame(cueLoop);
+}
+function startCueLoop() { if (!cueRaf && !audio.paused && !document.hidden) cueRaf = requestAnimationFrame(cueLoop); }
+audio.addEventListener("playing", startCueLoop);
+audio.addEventListener("seeked", () => updateCue(audio.currentTime));
+document.addEventListener("visibilitychange", startCueLoop);
 audio.onplay = audio.onpause = () => {
   const s = ic(audio.paused ? "play" : "pause", 1);
   $("mini-play").innerHTML = s; $("p-play").innerHTML = s;
