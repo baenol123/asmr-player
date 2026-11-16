@@ -847,7 +847,13 @@ def api_durations(work_id):
 @app.route("/api/audio/<path:relpath>")
 def api_audio(relpath):
     # conditional=True 로 Range 요청 지원 → 모바일에서 탐색(시킹) 가능
+    _last_played[relpath] = time.time()
     return send_file(safe_resolve(relpath), conditional=True)
+
+
+# 최근 30분 안에 재생한 파일은 FLAC 으로 바꾸지 않는다 — 듣는 도중 파일이 사라지지 않게
+_last_played = {}
+subgen.recently_played = lambda rel: time.time() - _last_played.get(rel, 0) < 1800
 
 
 @app.route("/api/srt/<path:relpath>")

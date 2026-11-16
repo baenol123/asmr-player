@@ -56,6 +56,13 @@ STEREO_OFF_FLAG = "좌우분리안함.txt"   # 있으면 이 작품은 절대 �
 # 말소리 중 '양쪽에서 동시에 서로 다른 소리'인 비율. 라이브러리에서 재 보니 성우 1명 트랙은 0~0.014,
 # 성우 2명이 겹치는 본편은 0.04~0.16 이었다
 OVERLAP_SPLIT = 0.03
+
+# 받은 지 일주일 지난 작품의 WAV 를 FLAC 으로 바꿔 용량을 줄인다. FLAC 은 무손실이라 소리는 비트까지 같다.
+# 정수 WAV 만 바꾼다 — FLAC 은 32비트 부동소수점을 담지 못해 float WAV 는 그대로 둔다.
+FLAC_ON = os.environ.get("ASMR_FLAC", "1") != "0"
+FLAC_AFTER_DAYS = 7
+FLAC_OFF_FLAG = "FLAC변환안함.txt"   # 작품 폴더에 있으면 그 작품은 바꾸지 않는다
+recently_played = lambda rel: False  # server.py 가 '최근 재생한 파일인지' 함수로 바꿔 끼운다
 DIRECT_UPLOAD_BYTES = 24 * 10**6   # 이보다 작은 오디오는 변환 없이 전송
 AUDIO_DIRECT_EXTS = {".mp3", ".m4a", ".wav", ".ogg", ".opus", ".flac", ".webm"}
 BATCH_SIZE = 20
@@ -1272,10 +1279,14 @@ def undo_names(root, key):
         log["skip"].append(key)   # 일부만 되돌린 채 서버가 켜져도 다시 바꾸지 않게 먼저 표시한다
     count, missing, error = 0, [], None
     try:
-        for run in reversed([r for r in log["runs"] if r["key"] == key]):
+        # FLAC 변환 기록은 되돌리지 않는다 — 내용이 FLAC 인 파일에 .wav 이름을 붙이게 된다
+        for run in reversed([r for r in log["runs"] if r["key"] == key and r.get("kind") != "flac"]):
             while run["ops"]:
                 old, new = run["ops"][-1]
                 src, dst = root / new, root / old
+                if not src.exists() and src.suffix.lower() == ".wav" and src.with_suffix(".flac").exists():
+                    # 이름 번역 뒤에 FLAC 으로 바뀐 파일 — 확장자는 FLAC 그대로 두고 이름만 되돌린다
+                    src, dst = src.with_suffix(".flac"), dst.with_suffix(".flac")
                 if not src.exists() and dst.exists():
                     pass   # 이전 실행이 이미 되돌린 항목
                 elif not src.exists():
@@ -1572,14 +1583,118 @@ def sweep(root, scan, signature, decode, seen, tried):
     return 0
 
 
+# ── 오래된 작품 FLAC 변환 ────────────────────────────────────────────
+def _probe_codec(path):
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return ""
+    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    try:
+        return subprocess.run([ffprobe, "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=codec_name",
+                               "-of", "default=nw=1:nk=1", str(path)],
+                              capture_output=True, text=True, timeout=60, creationflags=flags).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def _audio_md5(path):
+    """디코딩한 오디오 데이터의 MD5. WAV 와 FLAC 이 소리까지 같은지 비교하는 데 쓴다."""
+    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    r = subprocess.run([shutil.which("ffmpeg"), "-nostdin", "-v", "error", "-i", str(path), "-map", "0:a", "-f", "md5", "-"],
+                       capture_output=True, text=True, creationflags=flags)
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def flac_candidates(folder, root, scan, tried):
+    """FLAC 으로 바꿀 정수 WAV 목록. 아직 바꿀 때가 아니면 빈 목록."""
+    if (folder / FLAC_OFF_FLAG).is_file():
+        return []
+    try:
+        if time.time() - folder.stat().st_ctime < FLAC_AFTER_DAYS * 86400:   # Windows: 폴더를 넣은 시각
+            return []
+    except OSError:
+        return []
+    tracks = scan(folder)[0]
+    # 자막을 아직 만들 트랙이 남았으면 기다린다 — 받아쓰는 중인 파일이 사라지지 않게
+    if elevenlabs_key() and openai_key() and any(
+            t["path"] not in tried and needs_subtitle(t, root / t["path"]) for t in tracks):
+        return []
+    out = []
+    for t in tracks:
+        p = root / t["path"]
+        if p.suffix.lower() == ".wav" and not recently_played(t["path"]) and _probe_codec(p).startswith("pcm_s"):
+            out.append(p)
+    return out
+
+
+def convert_to_flac(folder, root, wavs):
+    """WAV 를 FLAC 으로 바꾼다. 소리가 같은지 확인한 뒤에만 WAV 를 지운다. (바꾼 수, 줄인 바이트, 문제 목록)"""
+    ffmpeg = shutil.which("ffmpeg")
+    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    rel = lambda p: Path(p).relative_to(root).as_posix()
+    ops, saved, problems = [], 0, []
+    for wav in wavs:
+        flac = wav.with_suffix(".flac")
+        if flac.exists():
+            problems.append(f"같은 이름의 FLAC 이 있어 건너뜀: {wav.name}")
+            continue
+        tmp = flac.with_name(flac.name + ".tmp")
+        r = subprocess.run([ffmpeg, "-nostdin", "-v", "error", "-y", "-i", str(wav), "-map", "0:a",
+                            "-c:a", "flac", "-compression_level", "8", "-f", "flac", str(tmp)],
+                           capture_output=True, creationflags=flags)
+        want = _audio_md5(wav)
+        if r.returncode or not want or want != _audio_md5(tmp):
+            tmp.unlink(missing_ok=True)
+            problems.append(f"FLAC 변환 결과가 원본과 달라 WAV 를 그대로 둠: {wav.name}")
+            continue
+        size = wav.stat().st_size
+        os.replace(tmp, flac)
+        try:
+            wav.unlink()
+        except OSError:
+            flac.unlink(missing_ok=True)   # 재생 중이라 못 지웠다 — 다음에 다시 한다
+            continue
+        saved += size - flac.stat().st_size
+        ops.append([rel(wav), rel(flac)])
+    if ops:
+        # 이어듣기·즐겨찾기가 새 경로를 따라가게 이름 변경 기록에 남긴다 (undo 는 이 기록을 건너뛴다)
+        log = read_name_log()
+        log["runs"].append({"key": work_key(folder.name), "kind": "flac", "old": folder.name, "new": folder.name,
+                            "time": time.time(), "ops": ops, "files": dict(ops)})
+        write_name_log(log)
+    return len(ops), saved, problems
+
+
+def flac_sweep(root, scan, signature, tried, checked):
+    """오래된 작품 하나를 FLAC 으로 바꾼다. 한 번에 한 작품만 — 새 작품 자막 생성이 오래 밀리지 않게."""
+    if not FLAC_ON or not shutil.which("ffmpeg"):
+        return
+    for folder in sorted(p for p in root.iterdir() if p.is_dir()):
+        sig = signature(folder)
+        if checked.get(folder.name) == sig:
+            continue   # 이 상태로 이미 확인했다 (float WAV 만 남은 작품 등)
+        wavs = flac_candidates(folder, root, scan, tried)
+        if not wavs:
+            checked[folder.name] = sig
+            continue
+        count, saved, problems = convert_to_flac(folder, root, wavs)
+        if count:
+            log(f"FLAC 변환 {count}개, {saved / 2**30:.1f}GB 줄임: {folder.name}")
+        for p in problems:
+            notify("warn", folder.name, p)
+        return
+
+
 def watch(root, scan, signature, decode):
-    seen, tried = {}, set()
+    seen, tried, flac_checked = {}, set(), {}
     while True:
         time.sleep(POLL_SECONDS)
         pause = 0
         try:
             if elevenlabs_key() and openai_key():
                 pause = sweep(root, scan, signature, decode, seen, tried)
+            if not pause:
+                flac_sweep(root, scan, signature, tried, flac_checked)
         except Exception as e:  # noqa: BLE001
             notify("error", "", f"감시 오류: {e}")
         time.sleep(pause)
