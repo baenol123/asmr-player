@@ -314,6 +314,84 @@ body.immersive #p-cue { flex: 1; max-height: none; line-height: 1.7; }
 }
 #toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
 
+/* ── 주사위 놀이판 (보드게임형 작품) ── */
+:root { --b-line: rgba(237,237,237,.5); --b-trap: #e5cf4a; --b-rest: #55dccb; --b-stop: #f2507e; }
+:root[data-theme="light"] { --b-line: rgba(26,26,27,.42); --b-trap: #9c7a00; --b-rest: #0e877b; --b-stop: #c8204f; }
+#d-board {
+  display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+  margin: 4px 0 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg2);
+}
+#d-board:active { transform: scale(.98); }
+#d-board .bi { width: 34px; height: 34px; flex-shrink: 0; color: var(--accent); }
+#d-board .bt { flex: 1; min-width: 0; }
+#d-board .a { font-size: 14px; font-weight: 600; }
+#d-board .b { font-size: 12px; color: var(--fg-dim); margin-top: 2px; }
+#board {
+  position: fixed; inset: 0; z-index: 35; background: var(--bg);
+  display: none; flex-direction: column;
+}
+#board.open { display: flex; }
+#b-head {
+  display: flex; align-items: center; gap: 8px; flex-shrink: 0;
+  padding: calc(8px + env(safe-area-inset-top, 0px)) 12px 8px 6px;
+}
+#b-close { width: 40px; height: 40px; flex-shrink: 0; }
+#b-head .t { flex: 1; min-width: 0; }
+#b-title { font-size: 16px; font-weight: 600; }
+#b-sub { font-size: 12px; color: var(--fg-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#b-reset { flex-shrink: 0; font-size: 12px; font-weight: 500; color: var(--fg-dim); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; }
+#b-reset.warn { color: var(--b-stop); border-color: var(--b-stop); }
+#b-diff { display: flex; gap: 6px; padding: 0 16px; flex-shrink: 0; }
+#b-diff button {
+  flex: 1; padding: 7px 0; border-radius: 8px; border: 1px solid var(--line);
+  font-size: 12px; color: var(--fg-dim); font-variant-numeric: tabular-nums;
+}
+#b-diff button.on { color: var(--fg); border-color: var(--fg-dim); background: var(--bg3); }
+#b-ctrl {
+  display: flex; align-items: center; gap: 12px; flex-shrink: 0;
+  padding: 10px 16px 12px; border-bottom: 1px solid var(--line);
+}
+#b-die {
+  width: 48px; height: 48px; flex-shrink: 0; border-radius: 12px; background: var(--bg3); border: 1px solid var(--line);
+  display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+#b-die.rolling { color: var(--fg-dim); }
+#b-msg { flex: 1; min-width: 0; font-size: 13px; line-height: 1.45; color: var(--fg-dim); }
+#b-msg b { color: var(--fg); font-weight: 600; }
+#b-roll { flex-shrink: 0; padding: 11px 16px; border-radius: 10px; background: var(--accent); color: var(--bg); font-size: 14px; font-weight: 600; }
+#b-roll:disabled { opacity: .35; cursor: default; }
+#b-scroll { flex: 1; overflow-y: auto; padding: 0 16px calc(110px + var(--safe-b)); }
+#b-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--fg-dim); margin: 14px 0 8px; }
+#b-legend span::before {
+  content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px;
+  border: 1.5px solid var(--b-line); border-radius: 2px;
+}
+#b-legend .k-trap::before { border-color: var(--b-trap); }
+#b-legend .k-rest::before { border-color: var(--b-rest); }
+#b-legend .k-stop::before { border-color: var(--b-stop); }
+#b-rules { margin: 0 0 14px; padding: 10px 12px 10px 28px; border: 1px solid var(--line); border-radius: 10px; font-size: 12.5px; line-height: 1.6; color: var(--fg-dim); }
+#b-svg { display: block; width: 100%; max-width: 480px; height: auto; margin: 0 auto; user-select: none; }
+.b-line { fill: none; stroke: var(--b-line); stroke-width: 2; }
+.b-arrow { fill: var(--b-line); }
+.b-tag rect { fill: var(--fg); }
+.b-tag text { fill: var(--bg); font-size: 15px; font-weight: 700; text-anchor: middle; dominant-baseline: central; }
+.b-tile rect { fill: var(--bg2); stroke: var(--b-line); stroke-width: 2; }
+.b-tile text { fill: var(--fg); }
+.b-num { font-size: 22px; font-weight: 500; }
+.b-kind, .b-big { text-anchor: middle; dominant-baseline: central; font-weight: 700; }
+.b-kind { font-size: 19px; letter-spacing: .04em; }
+.b-big { font-size: 20px; }
+.k-trap rect { stroke: var(--b-trap); } .k-trap text { fill: var(--b-trap); }
+.k-rest rect { stroke: var(--b-rest); } .k-rest text { fill: var(--b-rest); }
+.k-stop rect { stroke: var(--b-stop); } .k-stop text { fill: var(--b-stop); }
+.k-start rect, .k-goal rect { fill: var(--fg); stroke: var(--fg); }
+.k-start text, .k-goal text { fill: var(--bg); }
+.b-tile.seen:not(.k-start):not(.k-goal) rect { fill: var(--bg3); }
+.b-tile.target { cursor: pointer; }
+.b-tile.target rect { stroke: var(--accent); stroke-width: 6; }
+#b-piece { transition: transform .4s var(--ease); pointer-events: none; }
+#b-piece circle { fill: var(--accent); stroke: var(--bg); stroke-width: 3; }
+
 /* ── 이어 듣기 확인 ── */
 #ask {
   position: fixed; inset: 0; z-index: 95; display: none;
@@ -517,6 +595,16 @@ body.immersive #p-cue { flex: 1; max-height: none; line-height: 1.7; }
     <div id="d-orig"></div>
     <div id="d-sub"></div>
     <div id="d-tags"></div>
+    <button id="d-board" style="display:none">
+      <svg class="bi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
+        <rect x="3.5" y="3.5" width="17" height="17" rx="3.5"/>
+        <circle cx="8.5" cy="8.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="15.5" cy="8.5" r="1.4" fill="currentColor" stroke="none"/>
+        <circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/>
+        <circle cx="8.5" cy="15.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="15.5" cy="15.5" r="1.4" fill="currentColor" stroke="none"/>
+      </svg>
+      <span class="bt"><span class="a" style="display:block">놀이판 열기</span>
+      <span class="b" style="display:block">주사위를 굴려 멈춘 칸의 트랙을 듣는 작품이에요</span></span>
+    </button>
     <div id="d-listhead"><span id="d-count"></span><button id="d-folders">폴더 구조</button></div>
     <div id="d-tracks"></div>
   </div>
@@ -608,6 +696,25 @@ body.immersive #p-cue { flex: 1; max-height: none; line-height: 1.7; }
 </div>
 
 <div id="toast"></div>
+
+<div id="board">
+  <div id="b-head">
+    <button id="b-close" aria-label="닫기"><svg class="i"><use href="#i-arrow-left"/></svg></button>
+    <div class="t"><div id="b-title"></div><div id="b-sub"></div></div>
+    <button id="b-reset">처음부터</button>
+  </div>
+  <div id="b-diff"></div>
+  <div id="b-ctrl">
+    <div id="b-die">–</div>
+    <div id="b-msg"></div>
+    <button id="b-roll">굴리기</button>
+  </div>
+  <div id="b-scroll">
+    <div id="b-legend"></div>
+    <ol id="b-rules"></ol>
+    <div id="b-map"></div>
+  </div>
+</div>
 
 <div id="ask" role="dialog" aria-modal="true" aria-labelledby="ask-t">
   <div id="ask-box">
@@ -781,6 +888,8 @@ function fillDetail(w) {
       history.back();
       window.scrollTo(0, 0);
     });
+  $("d-board").style.display = w.board ? "" : "none";
+  $("d-board").onclick = () => openBoard(w);
   renderTracks(w);
 }
 
@@ -1064,6 +1173,9 @@ audio.onended = () => {
     askNext();   // 다음 트랙에 듣던 위치가 있으면 묻는다 (대답할 때까지 재생을 멈춘다)
     if (curIdx !== from) showToast(queue[curIdx].name);  // 자동 전환만 알린다
   }
+  // 놀이판에서 들은 칸이 끝나면 놀이판으로 돌아간다
+  if (bWork && playWork === bWork && queue.length === 1 && $("board").classList.contains("open")
+      && $("player").classList.contains("open")) history.back();
 };
 // 자막은 화면이 갱신될 때마다 맞춘다. timeupdate 는 초당 4번 정도라 자막이 최대 0.25초 늦게 떴다
 let cueRaf = 0;
@@ -1251,7 +1363,199 @@ window.onpopstate = () => {
     if (immersive) setImmersive(false);  // 라이브러리로 돌아갈 땐 헤더를 되살린다
     $("player").classList.remove("open");
   }
+  else if ($("board").classList.contains("open")) $("board").classList.remove("open");
   else $("detail").classList.remove("open");
+};
+
+/* ───── 보드게임(주사위 놀이)형 작품 ─────
+   판 정의는 static/boards/<이름>.json. 칸 번호와 파일 이름 앞의 숫자로 트랙을 찾는다 (00_시작 → 0칸, 08s → 8칸) */
+const boardDefs = {};
+const BW = 107, BH = 97, BPX = 138, BPY = 131;   // 칸 크기와 칸 간격 (SVG 좌표)
+let bWork = null, bDef = null, bState = null, bTracks = {}, bRolling = false, bResetArm = 0;
+
+async function openBoard(w) {
+  if (!boardDefs[w.board]) {
+    try { boardDefs[w.board] = await (await fetch("/static/boards/" + encodeURIComponent(w.board) + ".json")).json(); }
+    catch (e) { showToast("놀이판을 불러오지 못했습니다"); return; }
+  }
+  bWork = w; bDef = boardDefs[w.board];
+  bTracks = {};
+  w.tracks.forEach((t, i) => {
+    const m = t.path.split("/").pop().match(/^0*(\d+)/);
+    if (m && !(+m[1] in bTracks)) bTracks[+m[1]] = i;
+  });
+  bState = loadBoardState(w);
+  $("b-title").textContent = bDef.title;
+  $("b-sub").textContent = w.title;
+  $("b-legend").innerHTML = bDef.legend.map(l => `<span class="k-${l.kind}">${esc(l.label)}</span>`).join("");
+  $("b-rules").innerHTML = bDef.rules.map(r => `<li>${esc(r)}</li>`).join("");
+  $("b-diff").innerHTML = bDef.dice.map(d =>
+    `<button data-k="${esc(d.key)}">${esc(d.label)} 1~${d.faces}</button>`).join("");
+  document.querySelectorAll("#b-diff button").forEach(el => el.onclick = () => {
+    bState.diff = el.dataset.k; saveBoardState(); renderBoard();
+  });
+  $("b-map").innerHTML = boardSvg(bDef);
+  $("b-svg").onclick = e => { const g = e.target.closest(".b-tile"); if (g) tapTile(+g.dataset.n); };
+  renderBoard();
+  $("board").classList.add("open");
+  history.pushState({ v: "board" }, "");
+}
+
+function loadBoardState(w) {
+  let st = null;
+  try { st = JSON.parse(localStorage.getItem("board:" + w.id)); } catch (e) {}
+  return Object.assign({ pos: bDef.start, started: false, roll: 0, targets: [], seen: [], diff: bDef.dice[0].key }, st || {});
+}
+function saveBoardState() {
+  try { localStorage.setItem("board:" + bWork.id, JSON.stringify(bState)); } catch (e) {}
+}
+
+// from 칸에서 steps 만큼 갈 수 있는 칸들. 갈림길은 모두 후보, STOP 칸은 지나칠 수 없고, 골은 눈이 딱 맞아야 한다
+function boardTargets(def, from, steps) {
+  const adj = {}, stops = new Set(def.stops || []), out = new Set();
+  def.edges.forEach(e => {
+    (adj[e.from] = adj[e.from] || []).push(e.to);
+    if (e.both) (adj[e.to] = adj[e.to] || []).push(e.from);
+  });
+  const walk = (node, left, seen) => {
+    if (!left) { out.add(node); return; }
+    if (node !== from && stops.has(node)) { out.add(node); return; }
+    if (node === def.goal) return;
+    for (const nx of adj[node] || []) if (!seen.has(nx)) walk(nx, left - 1, new Set(seen).add(nx));
+  };
+  walk(from, steps, new Set([from]));
+  return [...out];
+}
+
+function boardSvg(def) {
+  const T = {};
+  def.tiles.forEach(t => T[t.n] = t);
+  const cx = c => c * BPX + BW / 2, cy = r => r * BPY + BH / 2;
+  const W = (def.cols - 1) * BPX + BW, H = (def.rows - 1) * BPY + BH;
+  // q 칸으로 들어가는 화살표. 꼭짓점이 칸 테두리에 닿는다 (선은 가로·세로만)
+  const tip = (p, q) => {
+    const dx = Math.sign(q[0] - p[0]), dy = Math.sign(q[1] - p[1]);
+    const x = q[0] - dx * BW / 2, y = q[1] - dy * BH / 2, s = 8, w = 6;
+    return `<path class="b-arrow" d="M${x} ${y}L${x - dx * s - dy * w} ${y - dy * s + dx * w}L${x - dx * s + dy * w} ${y - dy * s - dx * w}Z"/>`;
+  };
+  let lines = "", arrows = "", tags = "";
+  def.edges.forEach(e => {
+    const a = T[e.from], b = T[e.to];
+    const pts = [[cx(a.c), cy(a.r)], ...(e.via || []).map(([c, r]) => [cx(c), cy(r)]), [cx(b.c), cy(b.r)]];
+    lines += `<polyline class="b-line" points="${pts.map(p => p.join(",")).join(" ")}"/>`;
+    arrows += tip(pts[pts.length - 2], pts[pts.length - 1]);
+    if (e.both) arrows += tip(pts[1], pts[0]);
+    if (e.label) {   // 가장 긴 구간 가운데에 이름표
+      let best = -1, mid = null;
+      for (let k = 1; k < pts.length; k++) {
+        const len = Math.abs(pts[k][0] - pts[k - 1][0]) + Math.abs(pts[k][1] - pts[k - 1][1]);
+        if (len > best) { best = len; mid = [(pts[k][0] + pts[k - 1][0]) / 2, (pts[k][1] + pts[k - 1][1]) / 2]; }
+      }
+      tags += `<g class="b-tag"><rect x="${mid[0] - 44}" y="${mid[1] - 15}" width="88" height="30" rx="15"/>
+        <text x="${mid[0]}" y="${mid[1] + 1}">${esc(e.label)}</text></g>`;
+    }
+  });
+  const tiles = def.tiles.map(t => {
+    const x = t.c * BPX, y = t.r * BPY, k = t.kind || "normal";
+    const body = k === "start" || k === "goal"
+      ? `<text class="b-big" x="${x + BW / 2}" y="${y + BH / 2 + 1}">${esc(t.label)}</text>`
+      : `<text class="b-num" x="${x + 10}" y="${y + 29}">${t.n}</text>` +
+        (t.label ? `<text class="b-kind" x="${x + BW / 2}" y="${y + 66}">${esc(t.label)}</text>` : "");
+    return `<g class="b-tile k-${k}" data-n="${t.n}"><rect x="${x}" y="${y}" width="${BW}" height="${BH}" rx="6"/>${body}</g>`;
+  }).join("");
+  return `<svg id="b-svg" viewBox="-10 -10 ${W + 20} ${H + 20}" role="img" aria-label="${esc(def.title)}">
+    ${lines}${arrows}${tags}${tiles}<g id="b-piece"><circle cx="0" cy="0" r="13"/></g></svg>`;
+}
+
+function renderBoard() {
+  const st = bState, def = bDef;
+  const T = {};
+  def.tiles.forEach(t => T[t.n] = t);
+  // 시작 전에는 START 칸이 누를 칸이다
+  const targets = st.started ? st.targets : [def.start];
+  document.querySelectorAll("#b-svg .b-tile").forEach(g => {
+    const n = +g.dataset.n;
+    g.classList.toggle("target", targets.includes(n));
+    g.classList.toggle("seen", st.seen.includes(n));
+  });
+  const t = T[st.pos];
+  $("b-piece").style.transform = `translate(${t.c * BPX + BW - 22}px, ${t.r * BPY + BH - 22}px)`;
+  document.querySelectorAll("#b-diff button").forEach(el => el.classList.toggle("on", el.dataset.k === st.diff));
+  if (!bRolling) $("b-die").textContent = st.roll || "–";
+  const done = st.pos === def.goal;
+  $("b-roll").disabled = bRolling || !st.started || done || st.targets.length > 0;
+  const here = st.pos === def.start ? "START" : st.pos === def.goal ? "GOAL" : st.pos + "칸";
+  $("b-msg").innerHTML =
+    !st.started ? "<b>START</b> 칸을 눌러 시작 음성을 들으세요" :
+    done ? "<b>골인!</b> 다시 하려면 처음부터를 누르세요" :
+    st.targets.length > 1 ? `<b>${st.roll}</b> — 빛나는 칸 중 갈 곳을 고르세요` :
+    st.targets.length ? `<b>${st.roll}</b> — 빛나는 칸을 누르세요` :
+    st.roll && st.noMove ? `<b>${st.roll}</b> — 갈 수 있는 칸이 없어요. 다시 굴리세요` :
+    `지금 <b>${here}</b>. 다 들었으면 주사위를 굴리세요`;
+}
+
+function rollBoardDice() {
+  if (bRolling) return;
+  const faces = (bDef.dice.find(d => d.key === bState.diff) || bDef.dice[0]).faces;
+  bRolling = true; renderBoard();
+  $("b-die").classList.add("rolling");
+  let k = 0;
+  const spin = setInterval(() => {
+    $("b-die").textContent = 1 + Math.floor(Math.random() * faces);
+    if (++k < 9) return;
+    clearInterval(spin);
+    bRolling = false;
+    $("b-die").classList.remove("rolling");
+    const roll = 1 + Math.floor(Math.random() * faces);
+    bState.roll = roll;
+    bState.targets = boardTargets(bDef, bState.pos, roll);
+    bState.noMove = !bState.targets.length;
+    saveBoardState(); renderBoard();
+    const first = document.querySelector("#b-svg .b-tile.target");
+    if (first) first.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, 70);
+}
+
+function tapTile(n) {
+  const st = bState;
+  if (!st.started) {
+    if (n !== bDef.start) { showToast("START 칸부터 시작해요"); return; }
+    st.started = true; st.seen = [n];
+    saveBoardState(); renderBoard(); playBoardTile(n);
+    return;
+  }
+  if (st.targets.includes(n)) {
+    st.pos = n; st.targets = []; st.noMove = false;
+    if (!st.seen.includes(n)) st.seen.push(n);
+    saveBoardState(); renderBoard(); playBoardTile(n);
+  } else if (n === st.pos) {
+    playBoardTile(n);   // 지금 칸 다시 듣기
+  } else {
+    showToast(st.targets.length ? "빛나는 칸을 눌러 주세요" : "주사위를 굴린 뒤 빛나는 칸을 누르세요");
+  }
+}
+
+function playBoardTile(n) {
+  const i = bTracks[n];
+  if (i === undefined) { showToast(`${n}칸의 음성 파일을 찾지 못했습니다`); return; }
+  askThenPlay(bWork, 0, true, [bWork.tracks[i]]);
+}
+
+$("b-roll").onclick = rollBoardDice;
+$("b-close").onclick = () => history.back();
+$("b-reset").onclick = () => {
+  // 실수로 누르지 않게 두 번 눌러야 초기화한다
+  if (Date.now() - bResetArm > 3000) {
+    bResetArm = Date.now();
+    $("b-reset").textContent = "한 번 더 누르면 초기화"; $("b-reset").classList.add("warn");
+    setTimeout(() => { $("b-reset").textContent = "처음부터"; $("b-reset").classList.remove("warn"); }, 3000);
+    return;
+  }
+  bResetArm = 0;
+  $("b-reset").textContent = "처음부터"; $("b-reset").classList.remove("warn");
+  bState = { pos: bDef.start, started: false, roll: 0, targets: [], seen: [], diff: bState.diff };
+  saveBoardState(); renderBoard();
+  $("b-scroll").scrollTo({ top: 0, behavior: "smooth" });
 };
 
 /* ───── SRT/VTT 자막 ───── */

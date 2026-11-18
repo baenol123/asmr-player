@@ -64,6 +64,22 @@ RETRY_AFTER_TITLE_ERROR = 6 * 3600
 app = Flask(__name__, static_folder=str(BASE / "static"), static_url_path="/static")
 app.json.ensure_ascii = False   # 한글을 \uXXXX 로 늘리지 않는다
 
+
+def load_boards():
+    """보드게임(주사위 놀이)형 작품의 판 정의. static/boards/*.json 의 works 에 적힌 RJ 번호 → 파일 이름"""
+    boards = {}
+    for f in sorted((BASE / "static" / "boards").glob("*.json")):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for rj in data.get("works") or []:
+            boards[rj.upper()] = f.stem
+    return boards
+
+
+BOARDS = load_boards()
+
 try:   # 작품 추천 페이지(/recommend). 파일이 없으면 기능만 빠진다
     import recommend
     recommend.init(WORKS_DIR, META_DIR, CACHE_DIR)
@@ -384,6 +400,7 @@ def api_works():
             "titlePending": needs_translation(meta),
             # 제목 번역이나 원작 서클 조회가 남아 있음 - 프런트가 /api/meta 를 다시 부른다
             "metaPending": needs_title_retry(meta) or needs_circle_retry(meta),
+            "board": BOARDS.get(rj) if rj else None,
             "hasCover": bool(local_cover) or (meta or {}).get("image") is not None,
             "localCover": local_cover,
             "tracks": tracks,
