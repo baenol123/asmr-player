@@ -29,6 +29,7 @@ from pathlib import Path
 import requests
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 
+import boardgen
 import subgen
 
 BASE = Path(__file__).resolve().parent
@@ -66,7 +67,7 @@ app.json.ensure_ascii = False   # 한글을 \uXXXX 로 늘리지 않는다
 
 
 def load_boards():
-    """보드게임(주사위 놀이)형 작품의 판 정의. static/boards/*.json 의 works 에 적힌 RJ 번호 → 파일 이름"""
+    """손으로 만든 놀이판 정의. static/boards/*.json 의 works 에 적힌 RJ 번호 → 판 정의"""
     boards = {}
     for f in sorted((BASE / "static" / "boards").glob("*.json")):
         try:
@@ -74,7 +75,7 @@ def load_boards():
         except (OSError, ValueError):
             continue
         for rj in data.get("works") or []:
-            boards[rj.upper()] = f.stem
+            boards[rj.upper()] = data
     return boards
 
 
@@ -400,13 +401,76 @@ def api_works():
             "titlePending": needs_translation(meta),
             # 제목 번역이나 원작 서클 조회가 남아 있음 - 프런트가 /api/meta 를 다시 부른다
             "metaPending": needs_title_retry(meta) or needs_circle_retry(meta),
-            "board": BOARDS.get(rj) if rj else None,
+            # 놀이판: 손으로 만든 판이 있으면 manual, 보드게임형으로 보이면 auto (AI 가 지도를 읽어 만든다)
+            "board": "manual" if rj in BOARDS else "auto" if boardgen.looks_like_board(meta, tracks, others) else None,
             "hasCover": bool(local_cover) or (meta or {}).get("image") is not None,
             "localCover": local_cover,
             "tracks": tracks,
             "others": others,
         })
     return jsonify(works)
+
+
+# ── 주사위 놀이판 ────────────────────────────────────────────────────
+BOARD_CACHE = CACHE_DIR / "boards"
+_board_jobs, _board_lock = set(), threading.Lock()
+
+
+def _board_job(key, map_path, rule_path, tracks, title):
+    try:
+        out = {"def": boardgen.generate(map_path, rule_path, tracks, title)}
+    except Exception as e:  # noqa: BLE001 — 어떤 실패든 기본 판으로 돌아가고 이유를 보여 준다
+        out = {"error": str(e)[:300]}
+    out["time"] = time.time()
+    try:
+        BOARD_CACHE.mkdir(parents=True, exist_ok=True)
+        tmp = BOARD_CACHE / f"{key}.json.tmp"
+        tmp.write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(tmp, BOARD_CACHE / f"{key}.json")
+    finally:
+        with _board_lock:
+            _board_jobs.discard(key)
+    print(f"  [놀이판] {key}: " + ("지도를 읽어 판을 만들었습니다" if "def" in out else f"실패 - {out['error']}"))
+
+
+@app.route("/api/board/<path:work_id>", methods=["GET", "POST"])
+def api_board(work_id):
+    """놀이판 정의. 손으로 만든 판 → AI 가 지도를 읽어 만든 판 → 기본 판 순. POST 는 AI 판을 다시 만든다"""
+    folder = (WORKS_DIR / work_id).resolve()
+    if folder.parent != WORKS_DIR.resolve() or not folder.is_dir():
+        abort(404)
+    tracks, _, others = scan_work_dir(folder)
+    m = RJ_RE.search(folder.name)
+    key = m.group(0).upper() if m else folder.name
+    if key in BOARDS:
+        return jsonify({"def": BOARDS[key], "source": "manual"})
+    meta = load_meta(key) if m else None
+    title = (meta or {}).get("title") or folder.name
+    map_rel, rule_rel = boardgen.pick_images(others)
+    out = {"def": boardgen.basic_board(tracks, title), "source": "basic", "map": map_rel}
+    cache = BOARD_CACHE / f"{key}.json"
+    with _board_lock:
+        if key in _board_jobs:
+            return jsonify({**out, "pending": True})
+        if request.method == "POST":
+            cache.unlink(missing_ok=True)
+        if cache.is_file():
+            try:
+                data = json.loads(cache.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                data = {}
+            if data.get("def"):
+                return jsonify({"def": data["def"], "source": "ai", "map": map_rel})
+            if data.get("error"):
+                return jsonify({**out, "error": data["error"]})
+        if not map_rel:
+            return jsonify({**out, "error": "지도 이미지를 찾지 못했습니다"})
+        if not subgen.openai_key():
+            return jsonify({**out, "error": "OpenAI 키가 없어 지도를 읽지 못했습니다"})
+        _board_jobs.add(key)
+    threading.Thread(target=_board_job, daemon=True, args=(
+        key, WORKS_DIR / map_rel, WORKS_DIR / rule_rel if rule_rel else None, tracks, title)).start()
+    return jsonify({**out, "pending": True})
 
 
 @app.route("/api/meta/<rj>")
