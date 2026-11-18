@@ -953,8 +953,8 @@ $("d-fav").onclick = () => {
 };
 
 /* ───── 재생 ───── */
-// 전에 듣던 위치가 있으면 한 번 묻고 재생한다. 화면에서 직접 고른 트랙에만 묻는다
-// (자동 다음 트랙·잠금화면 버튼·이어 듣기 카드는 묻지 않고 이어서 재생)
+// 전에 듣던 위치가 있으면 한 번 묻고 재생한다. 직접 고른 트랙과 자동으로 넘어간 다음 트랙에 묻는다
+// (잠금화면 버튼·이어 듣기 카드는 묻지 않고 이어서 재생)
 function savedPos(t) { return +localStorage.getItem("pos:" + t.path) || 0; }
 function askThenPlay(w, i, openPlayer, q) {
   const t = (q || w.tracks)[i];
@@ -1061,7 +1061,7 @@ audio.onended = () => {
   }
   if (autoNext) {
     const from = curIdx;
-    next();
+    askNext();   // 다음 트랙에 듣던 위치가 있으면 묻는다 (대답할 때까지 재생을 멈춘다)
     if (curIdx !== from) showToast(queue[curIdx].name);  // 자동 전환만 알린다
   }
 };
