@@ -314,6 +314,31 @@ body.immersive #p-cue { flex: 1; max-height: none; line-height: 1.7; }
 }
 #toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
 
+/* ── 이어 듣기 확인 ── */
+#ask {
+  position: fixed; inset: 0; z-index: 95; display: none;
+  align-items: flex-end; justify-content: center;
+  background: rgba(0,0,0,.45); padding: 0 16px calc(24px + var(--safe-b));
+}
+#ask.on { display: flex; }
+#ask-box {
+  width: 100%; max-width: 420px; background: var(--bg2); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 14px; padding: 18px 18px 14px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.35);
+}
+#ask-t { font-size: 15px; font-weight: 600; }
+#ask-s {
+  font-size: 13px; color: var(--fg-dim); margin-top: 4px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+#ask-btns { display: flex; gap: 8px; margin-top: 14px; }
+#ask-btns button {
+  flex: 1; padding: 11px 0; border-radius: 10px; font-size: 14px; font-weight: 600;
+  background: var(--bg3); color: var(--fg); border: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+#ask-btns #ask-resume { background: var(--accent); color: var(--bg); border-color: transparent; }
+
 /* ── 자막 설정 패널 ── */
 #p-settings {
   /* body 직속 — 라이브러리 화면과 플레이어 양쪽에서 열린다 */
@@ -584,6 +609,14 @@ body.immersive #p-cue { flex: 1; max-height: none; line-height: 1.7; }
 
 <div id="toast"></div>
 
+<div id="ask" role="dialog" aria-modal="true" aria-labelledby="ask-t">
+  <div id="ask-box">
+    <div id="ask-t">전에 듣던 위치로 이동할까요?</div>
+    <div id="ask-s"></div>
+    <div id="ask-btns"><button id="ask-start">처음부터</button><button id="ask-resume"></button></div>
+  </div>
+</div>
+
 <audio id="audio" preload="metadata"></audio>
 
 <script>
@@ -777,7 +810,7 @@ function renderTracks(w) {
   });
   $("d-tracks").innerHTML = html;
   document.querySelectorAll(".track").forEach(el =>
-    el.onclick = () => playTrack(w, +el.dataset.i, true));
+    el.onclick = () => askThenPlay(w, +el.dataset.i, true));
   markPlaying();
   fillDurations(w);
 }
@@ -873,8 +906,8 @@ function renderTree(w) {
   // 탐색 모드에서는 재생 큐를 현재 폴더의 오디오로 한정 (다음 방 스포일러 방지)
   const folderTracks = files.filter(f => f.kind === "audio");
   document.querySelectorAll(".track[data-i]").forEach(el =>
-    el.onclick = () => playTrack(w, folderTracks.findIndex(f => f.ti === +el.dataset.i), true,
-                                 folderTracks.map(f => w.tracks[f.ti])));
+    el.onclick = () => askThenPlay(w, folderTracks.findIndex(f => f.ti === +el.dataset.i), true,
+                                   folderTracks.map(f => w.tracks[f.ti])));
   document.querySelectorAll(".track.other").forEach(el =>
     el.onclick = () => openViewer(el.dataset.p, el.dataset.k));
   markPlaying();
@@ -920,12 +953,33 @@ $("d-fav").onclick = () => {
 };
 
 /* ───── 재생 ───── */
-function playTrack(w, i, openPlayer, q) {
+// 전에 듣던 위치가 있으면 한 번 묻고 재생한다. 화면에서 직접 고른 트랙에만 묻는다
+// (자동 다음 트랙·잠금화면 버튼·이어 듣기 카드는 묻지 않고 이어서 재생)
+function savedPos(t) { return +localStorage.getItem("pos:" + t.path) || 0; }
+function askThenPlay(w, i, openPlayer, q) {
+  const t = (q || w.tracks)[i];
+  const saved = t && savedPos(t);
+  if (!t || saved <= 5) return playTrack(w, i, openPlayer, q);
+  $("ask-s").textContent = t.name;
+  $("ask-resume").textContent = fmt(saved) + "부터";
+  $("ask").classList.add("on");
+  const done = from => {
+    $("ask").classList.remove("on");
+    if (from === null) return;
+    if (from === 0) localStorage.removeItem("pos:" + t.path);
+    playTrack(w, i, openPlayer, q, from);
+  };
+  $("ask-start").onclick = () => done(0);
+  $("ask-resume").onclick = () => done(saved);
+  $("ask").onclick = e => { if (e.target === $("ask")) done(null); };   // 바깥을 누르면 취소
+}
+
+function playTrack(w, i, openPlayer, q, from) {
   queue = q || w.tracks; curIdx = i; playWork = w;
   const t = queue[i];
   audio.src = "/api/audio/" + enc(t.path);
   audio.playbackRate = SPEEDS[speedIdx];
-  const saved = +localStorage.getItem("pos:" + t.path) || 0;
+  const saved = from ?? savedPos(t);
   audio.currentTime = 0;
   // 이어듣기 위치는 재생 전에 옮긴다 — play() 뒤에 옮기면 0초부터 잠깐 소리가 난다
   if (saved > 5)
@@ -994,6 +1048,8 @@ function showToast(text) {
 
 const next = () => curIdx < queue.length - 1 && playTrack(playWork, curIdx + 1, false, queue);
 const prev = () => curIdx > 0 && playTrack(playWork, curIdx - 1, false, queue);
+const askNext = () => curIdx < queue.length - 1 && askThenPlay(playWork, curIdx + 1, false, queue);
+const askPrev = () => curIdx > 0 && askThenPlay(playWork, curIdx - 1, false, queue);
 
 audio.onended = () => {
   const t = queue[curIdx];
@@ -1033,11 +1089,11 @@ audio.ontimeupdate = () => {
 };
 
 $("mini-play").onclick = e => { e.stopPropagation(); audio.paused ? audio.play() : audio.pause(); };
-$("mini-next").onclick = e => { e.stopPropagation(); next(); };
+$("mini-next").onclick = e => { e.stopPropagation(); askNext(); };
 $("mini-open").onclick = showPlayer;
 $("p-play").onclick = () => audio.paused ? audio.play() : audio.pause();
-$("p-next").onclick = next;
-$("p-prev").onclick = prev;
+$("p-next").onclick = askNext;
+$("p-prev").onclick = askPrev;
 $("p-back10").onclick = () => audio.currentTime = Math.max(0, audio.currentTime - 10);
 $("p-fwd10").onclick = () => audio.currentTime = Math.min(audio.duration || 0, audio.currentTime + 10);
 $("p-speed").onclick = () => {
