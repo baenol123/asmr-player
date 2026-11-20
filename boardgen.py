@@ -88,13 +88,14 @@ _NULL_STR = {"type": ["string", "null"]}
 SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["title", "subtitle", "start", "goal", "stops", "exactGoal", "dice", "legend", "rules", "tiles", "edges"],
+    "required": ["title", "subtitle", "start", "goal", "stops", "tolls", "exactGoal", "dice", "legend", "rules", "tiles", "edges"],
     "properties": {
         "title": {"type": "string"},
         "subtitle": {"type": "string"},
         "start": {"type": "integer"},
         "goal": {"type": "integer"},
         "stops": {"type": "array", "items": {"type": "integer"}},
+        "tolls": {"type": "array", "items": {"type": "integer"}},
         "exactGoal": {"type": "boolean"},
         "dice": {"type": "array", "items": {
             "type": "object", "additionalProperties": False, "required": ["key", "label", "faces"],
@@ -139,6 +140,8 @@ Output rules:
   connection between two tiles in the same row or column. label: text printed on the line (e.g. "ショートカット" →
   "지름길"), else null.
 - stops: numbers of forced-stop squares. exactGoal: true if the goal needs an exact roll.
+- tolls: squares whose track must be heard even when a move only passes over them, then the piece keeps moving
+  (e.g. the square on a shortcut route when the map says choosing that route brings a strict command). Usually [].
 - dice: difficulty options if the rules describe them (key, Korean label, number of faces), otherwise
   [{{"key": "normal", "label": "기본", "faces": 6}}].
 - legend: the square kinds that appear, with their Korean names as the map's legend calls them.
@@ -260,6 +263,7 @@ def validate(d, tracks):
         "title": str(d.get("title") or "주사위 놀이판"), "subtitle": str(d.get("subtitle") or ""),
         "cols": cols, "rows": rows, "start": start, "goal": goal,
         "stops": [int(n) for n in d.get("stops") or [] if int(n) in seen_n],
+        "tolls": list(dict.fromkeys(int(n) for n in d.get("tolls") or [] if int(n) in seen_n - {start, goal})),
         "exactGoal": bool(d.get("exactGoal")),
         "dice": dice or [{"key": "normal", "label": "기본", "faces": 6}],
         "legend": [{"kind": x["kind"], "label": str(x["label"])} for x in d.get("legend") or [] if x.get("kind") in KINDS],

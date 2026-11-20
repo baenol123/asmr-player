@@ -400,8 +400,10 @@ body.immersive #p-cue { flex: 1; max-height: none; line-height: 1.7; }
 .k-start rect, .k-goal rect { fill: var(--fg); stroke: var(--fg); }
 .k-start text, .k-goal text { fill: var(--bg); }
 .b-tile.seen:not(.k-start):not(.k-goal) rect { fill: var(--bg3); }
+.b-tile.via rect { stroke: var(--accent); stroke-width: 3; stroke-dasharray: 7 5; }
 .b-tile.target { cursor: pointer; }
-.b-tile.target rect { stroke: var(--accent); stroke-width: 6; }
+.b-tile.target rect { stroke: var(--accent); stroke-width: 6; stroke-dasharray: none; }
+#b-msg .b-via { display: block; font-size: 12px; }
 #b-piece { transition: transform .4s var(--ease); pointer-events: none; }
 #b-piece circle { fill: var(--accent); stroke: var(--bg); stroke-width: 3; }
 
@@ -1182,14 +1184,16 @@ audio.onended = () => {
     store.set("doneTracks", doneTracks);
     renderLibrary();
   }
-  if (autoNext) {
+  // 놀이판에서 고른 칸들(지나온 지름길 칸 → 멈춘 칸)은 자동 넘김 설정과 상관없이 이어서 튼다
+  const onBoard = queue === bQueue && $("board").classList.contains("open");
+  const last = curIdx === queue.length - 1;
+  if (autoNext || onBoard) {
     const from = curIdx;
     askNext();   // 다음 트랙에 듣던 위치가 있으면 묻는다 (대답할 때까지 재생을 멈춘다)
     if (curIdx !== from) showToast(queue[curIdx].name);  // 자동 전환만 알린다
   }
-  // 놀이판에서 들은 칸이 끝나면 놀이판으로 돌아간다
-  if (bWork && playWork === bWork && queue.length === 1 && $("board").classList.contains("open")
-      && $("player").classList.contains("open")) history.back();
+  // 놀이판에서 들을 칸을 다 들으면 놀이판으로 돌아간다
+  if (onBoard && last && $("player").classList.contains("open")) history.back();
 };
 // 자막은 화면이 갱신될 때마다 맞춘다. timeupdate 는 초당 4번 정도라 자막이 최대 0.25초 늦게 떴다
 let cueRaf = 0;
@@ -1386,6 +1390,7 @@ window.onpopstate = () => {
    칸 번호와 파일 이름 앞의 숫자로 트랙을 찾는다 (00_시작 → 0칸, 08s → 8칸) */
 const BW = 107, BH = 97, BPX = 138, BPY = 131;   // 칸 크기와 칸 간격 (SVG 좌표)
 let bWork = null, bDef = null, bInfo = null, bState = null, bTracks = {}, bRolling = false, bResetArm = 0, bPoll = 0;
+let bQueue = null;   // 놀이판에서 튼 재생 목록 (지나온 지름길 칸 → 멈춘 칸)
 
 async function fetchBoard(w, regen) {
   const r = await fetch("/api/board/" + enc(w.id), regen ? { method: "POST" } : undefined);
@@ -1473,23 +1478,27 @@ function saveBoardState() {
   try { localStorage.setItem("board:" + bWork.id, JSON.stringify(bState)); } catch (e) {}
 }
 
-// from 칸에서 steps 만큼 갈 수 있는 칸들. 갈림길은 모두 후보, STOP 칸은 지나칠 수 없고,
-// 골은 눈이 딱 맞아야 한다 (exactGoal: false 인 판은 눈이 남아도 골에서 멈춘다)
-function boardTargets(def, from, steps) {
-  const adj = {}, stops = new Set(def.stops || []), out = new Set();
+// from 칸에서 steps 만큼 갈 수 있는 칸 → 가는 길에 지나며 들어야 하는 칸(tolls, 예: 지름길 칸) 목록.
+// 갈림길은 모두 후보, STOP 칸은 지나칠 수 없고, 골은 눈이 딱 맞아야 한다
+// (exactGoal: false 인 판은 눈이 남아도 골에서 멈춘다). 같은 칸에 가는 길이 여럿이면 들을 칸이 적은 길.
+function boardMoves(def, from, steps) {
+  const adj = {}, stops = new Set(def.stops || []), tolls = new Set(def.tolls || []), out = new Map();
   def.edges.forEach(e => {
     (adj[e.from] = adj[e.from] || []).push(e.to);
     if (e.both) (adj[e.to] = adj[e.to] || []).push(e.from);
   });
-  const walk = (node, left, seen) => {
-    if (!left) { out.add(node); return; }
-    if (node !== from && stops.has(node)) { out.add(node); return; }
-    if (node === def.goal) { if (def.exactGoal === false) out.add(node); return; }
-    for (const nx of adj[node] || []) if (!seen.has(nx)) walk(nx, left - 1, new Set(seen).add(nx));
+  const add = (n, paid) => { if (!out.has(n) || paid.length < out.get(n).length) out.set(n, paid); };
+  const walk = (node, left, seen, paid) => {
+    if (!left) { add(node, paid); return; }
+    if (node !== from && stops.has(node)) { add(node, paid); return; }
+    if (node === def.goal) { if (def.exactGoal === false) add(node, paid); return; }
+    if (node !== from && tolls.has(node)) paid = [...paid, node];
+    for (const nx of adj[node] || []) if (!seen.has(nx)) walk(nx, left - 1, new Set(seen).add(nx), paid);
   };
-  walk(from, steps, new Set([from]));
-  return [...out];
+  walk(from, steps, new Set([from]), []);
+  return out;
 }
+const boardTargets = (def, from, steps) => [...boardMoves(def, from, steps).keys()];
 
 function boardSvg(def) {
   const T = {};
@@ -1538,9 +1547,13 @@ function renderBoard() {
   def.tiles.forEach(t => T[t.n] = t);
   // 시작 전에는 START 칸이 누를 칸이다
   const targets = st.started ? st.targets : [def.start];
+  // 빛나는 칸으로 가는 길에 지나며 들어야 하는 칸 (점선)
+  const via = st.started && st.targets.length
+    ? [...new Set([...boardMoves(def, st.pos, st.roll).values()].flat())] : [];
   document.querySelectorAll("#b-svg .b-tile").forEach(g => {
     const n = +g.dataset.n;
     g.classList.toggle("target", targets.includes(n));
+    g.classList.toggle("via", via.includes(n));
     g.classList.toggle("seen", st.seen.includes(n));
   });
   const t = T[st.pos];
@@ -1550,11 +1563,12 @@ function renderBoard() {
   const done = st.pos === def.goal;
   $("b-roll").disabled = bRolling || !st.started || done || st.targets.length > 0;
   const here = st.pos === def.start ? "START" : st.pos === def.goal ? "GOAL" : st.pos + "칸";
+  const viaMsg = via.length ? `<span class="b-via">${via.map(n => n + "칸").join("·")}을 지나가면 그 칸 음성부터 들어요</span>` : "";
   $("b-msg").innerHTML =
     !st.started ? "<b>START</b> 칸을 눌러 시작 음성을 들으세요" :
     done ? "<b>골인!</b> 다시 하려면 처음부터를 누르세요" :
-    st.targets.length > 1 ? `<b>${st.roll}</b> — 빛나는 칸 중 갈 곳을 고르세요` :
-    st.targets.length ? `<b>${st.roll}</b> — 빛나는 칸을 누르세요` :
+    st.targets.length > 1 ? `<b>${st.roll}</b> — 빛나는 칸 중 갈 곳을 고르세요${viaMsg}` :
+    st.targets.length ? `<b>${st.roll}</b> — 빛나는 칸을 누르세요${viaMsg}` :
     st.roll && st.noMove ? `<b>${st.roll}</b> — 갈 수 있는 칸이 없어요. 다시 굴리세요` :
     `지금 <b>${here}</b>. 다 들었으면 주사위를 굴리세요`;
 }
@@ -1586,24 +1600,29 @@ function tapTile(n) {
   if (!st.started) {
     if (n !== bDef.start) { showToast("START 칸부터 시작해요"); return; }
     st.started = true; st.seen = [n];
-    saveBoardState(); renderBoard(); playBoardTile(n);
+    saveBoardState(); renderBoard(); playBoardTiles([n]);
     return;
   }
   if (st.targets.includes(n)) {
+    const tolls = boardMoves(bDef, st.pos, st.roll).get(n) || [];   // 지나온 지름길 칸은 먼저 듣는다
     st.pos = n; st.targets = []; st.noMove = false;
-    if (!st.seen.includes(n)) st.seen.push(n);
-    saveBoardState(); renderBoard(); playBoardTile(n);
+    for (const k of [...tolls, n]) if (!st.seen.includes(k)) st.seen.push(k);
+    saveBoardState(); renderBoard(); playBoardTiles([...tolls, n]);
   } else if (n === st.pos) {
-    playBoardTile(n);   // 지금 칸 다시 듣기
+    playBoardTiles([n]);   // 지금 칸 다시 듣기
   } else {
     showToast(st.targets.length ? "빛나는 칸을 눌러 주세요" : "주사위를 굴린 뒤 빛나는 칸을 누르세요");
   }
 }
 
-function playBoardTile(n) {
-  const i = bTracks[n];
-  if (i === undefined) { showToast(`${n}칸의 음성 파일을 찾지 못했습니다`); return; }
-  askThenPlay(bWork, 0, true, [bWork.tracks[i]]);
+// 칸들의 트랙을 차례로 튼다. 자동 넘김 설정과 상관없이 이어서 틀고, 다 들으면 놀이판으로 돌아온다
+function playBoardTiles(ns) {
+  const miss = ns.filter(n => bTracks[n] === undefined);
+  if (miss.length) showToast(`${miss.join(", ")}칸의 음성 파일을 찾지 못했습니다`);
+  const q = ns.filter(n => bTracks[n] !== undefined).map(n => bWork.tracks[bTracks[n]]);
+  if (!q.length) return;
+  bQueue = q;
+  askThenPlay(bWork, 0, true, q);
 }
 
 $("b-roll").onclick = rollBoardDice;
