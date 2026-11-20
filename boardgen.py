@@ -98,8 +98,9 @@ SCHEMA = {
         "tolls": {"type": "array", "items": {"type": "integer"}},
         "exactGoal": {"type": "boolean"},
         "dice": {"type": "array", "items": {
-            "type": "object", "additionalProperties": False, "required": ["key", "label", "faces"],
-            "properties": {"key": {"type": "string"}, "label": {"type": "string"}, "faces": {"type": "integer"}}}},
+            "type": "object", "additionalProperties": False, "required": ["key", "label", "faces", "minus"],
+            "properties": {"key": {"type": "string"}, "label": {"type": "string"}, "faces": {"type": "integer"},
+                           "minus": {"type": "integer"}}}},
         "legend": {"type": "array", "items": {
             "type": "object", "additionalProperties": False, "required": ["kind", "label"],
             "properties": {"kind": {"type": "string", "enum": KINDS}, "label": {"type": "string"}}}},
@@ -142,8 +143,9 @@ Output rules:
 - stops: numbers of forced-stop squares. exactGoal: true if the goal needs an exact roll.
 - tolls: squares whose track must be heard even when a move only passes over them, then the piece keeps moving
   (e.g. the square on a shortcut route when the map says choosing that route brings a strict command). Usually [].
-- dice: difficulty options if the rules describe them (key, Korean label, number of faces), otherwise
-  [{{"key": "normal", "label": "기본", "faces": 6}}].
+- dice: difficulty options if the rules describe them (key, Korean label, number of faces of the die actually rolled,
+  minus = the number subtracted from the roll, a result below 1 counting as 1; 0 if nothing is subtracted).
+  "Minus 2" on a normal die is faces 6, minus 2. Otherwise [{{"key": "normal", "label": "기본", "faces": 6, "minus": 0}}].
 - legend: the square kinds that appear, with their Korean names as the map's legend calls them.
 - rules: the map's and rule sheet's instructions in natural Korean, one short sentence each. The app plays the
   square's track by itself, so say "멈춘 칸의 트랙을 듣습니다" instead of telling the player to play a file.
@@ -257,7 +259,8 @@ def validate(d, tracks):
     cut = sorted(seen_n - reach)
     if cut:
         raise ValueError("출발 칸에서 갈 수 없는 칸: " + ", ".join(map(str, cut[:10])))
-    dice = [{"key": str(x["key"]) or f"d{i}", "label": str(x["label"]), "faces": int(x["faces"])}
+    dice = [{"key": str(x["key"]) or f"d{i}", "label": str(x["label"]), "faces": int(x["faces"]),
+             **({"minus": int(x["minus"])} if 0 < int(x.get("minus") or 0) < int(x["faces"]) else {})}
             for i, x in enumerate(d.get("dice") or []) if 1 <= int(x["faces"]) <= 20]
     return {
         "title": str(d.get("title") or "주사위 놀이판"), "subtitle": str(d.get("subtitle") or ""),

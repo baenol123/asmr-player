@@ -1428,7 +1428,7 @@ function showBoard(info) {
   $("b-legend").innerHTML = bDef.legend.map(l => `<span class="k-${l.kind}">${esc(l.label)}</span>`).join("");
   $("b-rules").innerHTML = bDef.rules.map(r => `<li>${esc(r)}</li>`).join("");
   $("b-diff").innerHTML = bDef.dice.map(d =>
-    `<button data-k="${esc(d.key)}">${esc(d.label)} 1~${d.faces}</button>`).join("");
+    `<button data-k="${esc(d.key)}">${esc(d.label)} ${d.minus ? "눈−" + d.minus : "1~" + d.faces}</button>`).join("");
   document.querySelectorAll("#b-diff button").forEach(el => el.onclick = () => {
     bState.diff = el.dataset.k; saveBoardState(); renderBoard();
   });
@@ -1559,23 +1559,28 @@ function renderBoard() {
   const t = T[st.pos];
   $("b-piece").style.transform = `translate(${t.c * BPX + BW - 22}px, ${t.r * BPY + BH - 22}px)`;
   document.querySelectorAll("#b-diff button").forEach(el => el.classList.toggle("on", el.dataset.k === st.diff));
-  if (!bRolling) $("b-die").textContent = st.roll || "–";
+  if (!bRolling) $("b-die").textContent = st.raw || st.roll || "–";   // 주사위에는 실제로 나온 눈
   const done = st.pos === def.goal;
   $("b-roll").disabled = bRolling || !st.started || done || st.targets.length > 0;
   const here = st.pos === def.start ? "START" : st.pos === def.goal ? "GOAL" : st.pos + "칸";
   const viaMsg = via.length ? `<span class="b-via">${via.map(n => n + "칸").join("·")}을 지나가면 그 칸 음성부터 들어요</span>` : "";
+  // 눈을 빼는 난이도면 실제로 나온 눈도 보여 준다: "1칸 (주사위 3 − 2)"
+  const minus = (def.dice.find(d => d.key === st.diff) || {}).minus || 0;
+  const moved = `<b>${st.roll}칸</b>` + (st.raw && minus ? ` (주사위 ${st.raw} − ${minus}${st.raw - minus < 1 ? ", 1칸으로" : ""})` : "");
   $("b-msg").innerHTML =
     !st.started ? "<b>START</b> 칸을 눌러 시작 음성을 들으세요" :
     done ? "<b>골인!</b> 다시 하려면 처음부터를 누르세요" :
-    st.targets.length > 1 ? `<b>${st.roll}</b> — 빛나는 칸 중 갈 곳을 고르세요${viaMsg}` :
-    st.targets.length ? `<b>${st.roll}</b> — 빛나는 칸을 누르세요${viaMsg}` :
-    st.roll && st.noMove ? `<b>${st.roll}</b> — 갈 수 있는 칸이 없어요. 다시 굴리세요` :
+    st.targets.length > 1 ? `${moved} — 빛나는 칸 중 갈 곳을 고르세요${viaMsg}` :
+    st.targets.length ? `${moved} — 빛나는 칸을 누르세요${viaMsg}` :
+    st.roll && st.noMove ? `${moved} — 갈 수 있는 칸이 없어요. 다시 굴리세요` :
     `지금 <b>${here}</b>. 다 들었으면 주사위를 굴리세요`;
 }
 
 function rollBoardDice() {
   if (bRolling) return;
-  const faces = (bDef.dice.find(d => d.key === bState.diff) || bDef.dice[0]).faces;
+  // 난이도에 따라 나온 눈에서 minus 만큼 빼고 간다. 1보다 작으면 1칸 (예: 보통은 6면 주사위 −2 → 1이 1/2)
+  const dice = bDef.dice.find(d => d.key === bState.diff) || bDef.dice[0];
+  const faces = dice.faces, minus = dice.minus || 0;
   bRolling = true; renderBoard();
   $("b-die").classList.add("rolling");
   let k = 0;
@@ -1585,8 +1590,8 @@ function rollBoardDice() {
     clearInterval(spin);
     bRolling = false;
     $("b-die").classList.remove("rolling");
-    const roll = 1 + Math.floor(Math.random() * faces);
-    bState.roll = roll;
+    const raw = 1 + Math.floor(Math.random() * faces), roll = Math.max(1, raw - minus);
+    bState.roll = roll; bState.raw = minus ? raw : 0;
     bState.targets = boardTargets(bDef, bState.pos, roll);
     bState.noMove = !bState.targets.length;
     saveBoardState(); renderBoard();
