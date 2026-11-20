@@ -1480,27 +1480,44 @@ function saveBoardState() {
   try { localStorage.setItem("board:" + bWork.id, JSON.stringify(bState)); } catch (e) {}
 }
 
-// from 칸에서 steps 만큼 갈 수 있는 칸 → 가는 길에 지나며 들어야 하는 칸(tolls, 예: 지름길 칸) 목록.
-// 갈림길은 모두 후보, STOP 칸은 지나칠 수 없고, 골은 눈이 딱 맞아야 한다
-// (exactGoal: false 인 판은 눈이 남아도 골에서 멈춘다). 같은 칸에 가는 길이 여럿이면 들을 칸이 적은 길.
-function boardMoves(def, from, steps) {
-  const adj = {}, stops = new Set(def.stops || []), tolls = new Set(def.tolls || []), out = new Map();
+function boardAdj(def) {
+  const adj = {};
   def.edges.forEach(e => {
     (adj[e.from] = adj[e.from] || []).push(e.to);
     if (e.both) (adj[e.to] = adj[e.to] || []).push(e.from);
   });
+  return adj;
+}
+// 굴리기 전에 갈 방향을 고르는 칸(chooseBefore)이면 고를 수 있는 첫 걸음들
+const boardExits = (def, n) => (def.chooseBefore || []).includes(n) ? boardAdj(def)[n] || [] : [];
+
+// from 칸에서 steps 만큼 갈 수 있는 칸 → 가는 길에 지나며 들어야 하는 칸(tolls, 예: 지름길 칸) 목록.
+// 갈림길은 모두 후보, STOP 칸은 지나칠 수 없다. 골은 눈이 딱 맞아야 하고 (exactGoal: false 인 판은 눈이 남아도
+// 골에서 멈춘다), passGoal 인 판은 딱 맞지 않으면 골을 지나쳐 계속 돈다. noTurns 의 [a, b, c] 는 한 번에
+// a → b → c 로 꺾어 갈 수 없다는 뜻. first 를 주면 첫 걸음은 그 칸 (굴리기 전에 고른 방향).
+// 같은 칸에 가는 길이 여럿이면 들을 칸이 적은 길.
+function boardMoves(def, from, steps, first) {
+  const adj = boardAdj(def), stops = new Set(def.stops || []), tolls = new Set(def.tolls || []), out = new Map();
+  const banned = new Set((def.noTurns || []).map(t => t.join(",")));
   const add = (n, paid) => { if (!out.has(n) || paid.length < out.get(n).length) out.set(n, paid); };
-  const walk = (node, left, seen, paid) => {
+  const walk = (node, prev, left, seen, paid) => {
     if (!left) { add(node, paid); return; }
     if (node !== from && stops.has(node)) { add(node, paid); return; }
-    if (node === def.goal) { if (def.exactGoal === false) add(node, paid); return; }
+    if (node === def.goal && node !== from) {
+      if (def.exactGoal === false) { add(node, paid); return; }
+      if (!def.passGoal) return;
+    }
     if (node !== from && tolls.has(node)) paid = [...paid, node];
-    for (const nx of adj[node] || []) if (!seen.has(nx)) walk(nx, left - 1, new Set(seen).add(nx), paid);
+    for (const nx of adj[node] || []) {
+      if (seen.has(nx) || banned.has(`${prev},${node},${nx}`)) continue;
+      if (node === from && first != null && nx !== first) continue;
+      walk(nx, node, left - 1, new Set(seen).add(nx), paid);
+    }
   };
-  walk(from, steps, new Set([from]), []);
+  walk(from, null, steps, new Set([from]), []);
   return out;
 }
-const boardTargets = (def, from, steps) => [...boardMoves(def, from, steps).keys()];
+const boardTargets = (def, from, steps, first) => [...boardMoves(def, from, steps, first).keys()];
 
 function boardSvg(def) {
   const T = {};
@@ -1547,24 +1564,28 @@ function renderBoard() {
   const st = bState, def = bDef;
   const T = {};
   def.tiles.forEach(t => T[t.n] = t);
+  const done = st.pos === def.goal;
+  // 굴리기 전에 방향을 고르는 칸: 고르기 전에는 갈 수 있는 쪽이 빛나고, 고른 쪽은 점선
+  const exits = st.started && !done && !st.targets.length ? boardExits(def, st.pos) : [];
+  const needDir = exits.length > 1, dir = needDir && exits.includes(st.dir) ? st.dir : null;
   // 시작 전에는 START 칸이 누를 칸이다
-  const targets = st.started ? st.targets : [def.start];
+  const targets = !st.started ? [def.start] : needDir && dir == null ? exits : st.targets;
   // 빛나는 칸으로 가는 길에 지나며 들어야 하는 칸 (점선)
   const via = st.started && st.targets.length
-    ? [...new Set([...boardMoves(def, st.pos, st.roll).values()].flat())] : [];
+    ? [...new Set([...boardMoves(def, st.pos, st.roll, st.dir).values()].flat())] : [];
   document.querySelectorAll("#b-svg .b-tile").forEach(g => {
     const n = +g.dataset.n;
     g.classList.toggle("target", targets.includes(n));
-    g.classList.toggle("via", via.includes(n));
+    g.classList.toggle("via", via.includes(n) || n === dir);
     g.classList.toggle("seen", st.seen.includes(n));
   });
   const t = T[st.pos];
   $("b-piece").style.transform = `translate(${t.c * BPX + BW - 22}px, ${t.r * BPY + BH - 22}px)`;
   document.querySelectorAll("#b-diff button").forEach(el => el.classList.toggle("on", el.dataset.k === st.diff));
   if (!bRolling) $("b-die").textContent = st.raw || st.roll || "–";   // 주사위에는 실제로 나온 눈
-  const done = st.pos === def.goal;
-  $("b-roll").disabled = bRolling || !st.started || done || st.targets.length > 0;
-  const here = st.pos === def.start ? "START" : st.pos === def.goal ? "GOAL" : st.pos + "칸";
+  $("b-roll").disabled = bRolling || !st.started || done || st.targets.length > 0 || (needDir && dir == null);
+  const name = n => n === def.start ? "START" : n === def.goal ? "GOAL" : n + "칸";
+  const here = name(st.pos);
   const viaMsg = via.length ? `<span class="b-via">${via.map(n => n + "칸").join("·")}을 지나가면 그 칸 음성부터 들어요</span>` : "";
   // 눈을 빼는 난이도면 실제로 나온 눈도 보여 준다: "1칸 (주사위 3 − 2)"
   const minus = (def.dice.find(d => d.key === st.diff) || {}).minus || 0;
@@ -1575,6 +1596,8 @@ function renderBoard() {
     st.targets.length > 1 ? `${moved} — 빛나는 칸 중 갈 곳을 고르세요${viaMsg}` :
     st.targets.length ? `${moved} — 빛나는 칸을 누르세요${viaMsg}` :
     st.roll && st.noMove ? `${moved} — 갈 수 있는 칸이 없어요. 다시 굴리세요` :
+    needDir && dir == null ? `지금 <b>${here}</b>. 굴리기 전에 갈 방향을 고르세요 (빛나는 칸 쪽)` :
+    needDir ? `<b>${name(dir)}</b> 쪽으로 갑니다. 주사위를 굴리세요<span class="b-via">다른 쪽 칸을 누르면 방향을 바꿔요</span>` :
     `지금 <b>${here}</b>. 다 들었으면 주사위를 굴리세요`;
 }
 
@@ -1594,7 +1617,7 @@ function rollBoardDice() {
     $("b-die").classList.remove("rolling");
     const raw = 1 + Math.floor(Math.random() * faces), roll = Math.max(1, raw - minus);
     bState.roll = roll; bState.raw = minus ? raw : 0;
-    bState.targets = boardTargets(bDef, bState.pos, roll);
+    bState.targets = boardTargets(bDef, bState.pos, roll, bState.dir);
     bState.noMove = !bState.targets.length;
     saveBoardState(); renderBoard();
     const first = document.querySelector("#b-svg .b-tile.target");
@@ -1610,15 +1633,22 @@ function tapTile(n) {
     saveBoardState(); renderBoard(); playBoardTiles([n]);
     return;
   }
+  const exits = !st.targets.length && st.pos !== bDef.goal ? boardExits(bDef, st.pos) : [];
+  if (exits.length > 1 && exits.includes(n)) {   // 굴리기 전에 방향 고르기 (다시 누르면 바꾼다)
+    st.dir = n;
+    saveBoardState(); renderBoard();
+    return;
+  }
   if (st.targets.includes(n)) {
-    const tolls = boardMoves(bDef, st.pos, st.roll).get(n) || [];   // 지나온 지름길 칸은 먼저 듣는다
-    st.pos = n; st.targets = []; st.noMove = false;
+    const tolls = boardMoves(bDef, st.pos, st.roll, st.dir).get(n) || [];   // 지나온 지름길 칸은 먼저 듣는다
+    st.pos = n; st.targets = []; st.noMove = false; st.dir = null;
     for (const k of [...tolls, n]) if (!st.seen.includes(k)) st.seen.push(k);
     saveBoardState(); renderBoard(); playBoardTiles([...tolls, n]);
   } else if (n === st.pos) {
     playBoardTiles([n]);   // 지금 칸 다시 듣기
   } else {
-    showToast(st.targets.length ? "빛나는 칸을 눌러 주세요" : "주사위를 굴린 뒤 빛나는 칸을 누르세요");
+    showToast(st.targets.length ? "빛나는 칸을 눌러 주세요" :
+      exits.length > 1 ? "빛나는 칸 중 갈 방향을 먼저 고르세요" : "주사위를 굴린 뒤 빛나는 칸을 누르세요");
   }
 }
 
