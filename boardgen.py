@@ -21,6 +21,7 @@ RULE_WORDS = re.compile(r"ルール|rule|遊び方|規則|說明|説明|설명|�
 KINDS = ["start", "goal", "normal", "trap", "rest", "stop", "special"]
 MIN_TILES = 6
 MAX_IMAGE_BYTES = 15 * 2**20
+MAX_TRANSCRIPT = 15000   # 첫 음성 자막은 이 글자 수까지만 보낸다
 
 
 def tile_number(path):
@@ -36,6 +37,31 @@ def track_numbers(tracks):
         if n is not None and n not in out:
             out[n] = t["path"]
     return out
+
+
+def opening_track(tracks):
+    """번호가 가장 작은 칸(보통 START)의 트랙. 대개 여기서 규칙을 말로 설명한다"""
+    nums = track_numbers(tracks)
+    if not nums:
+        return None
+    path = nums[min(nums)]
+    return next(t for t in tracks if t["path"] == path)
+
+
+def read_transcript(path, limit=MAX_TRANSCRIPT):
+    """SRT/VTT 자막에서 대사만 뽑아 한 줄씩 잇는다"""
+    try:
+        raw = path.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return ""
+    lines = []
+    for line in raw.splitlines():
+        line = re.sub(r"<[^>]+>", "", line).strip()
+        if not line or line.isdigit() or "-->" in line or line.startswith(("WEBVTT", "NOTE")):
+            continue
+        if not lines or lines[-1] != line:
+            lines.append(line)
+    return "\n".join(lines)[:limit]
 
 
 def looks_like_board(meta, tracks, others):
@@ -127,6 +153,13 @@ Audio files of this work (each square's file name starts with the square number,
 {files}
 Work title: {title}
 
+Transcript of the opening track ({opening}), where the narrator usually explains how to play. It is a machine
+transcription/translation and may contain errors. Where it is more specific than the images (dice adjustments per
+difficulty, what happens on special squares, how shortcuts work), follow the transcript:
+<<<
+{transcript}
+>>>
+
 Output rules:
 - One tile per square on the map, with n = the square number. START and GOAL squares also get their numbers
   (START is usually 0; GOAL is usually the last number, the one whose file means goal/ending).
@@ -147,7 +180,8 @@ Output rules:
   minus = the number subtracted from the roll, a result below 1 counting as 1; 0 if nothing is subtracted).
   "Minus 2" on a normal die is faces 6, minus 2. Otherwise [{{"key": "normal", "label": "기본", "faces": 6, "minus": 0}}].
 - legend: the square kinds that appear, with their Korean names as the map's legend calls them.
-- rules: the map's and rule sheet's instructions in natural Korean, one short sentence each. The app plays the
+- rules: the instructions from the map, the rule sheet and the opening track in natural Korean, one short sentence
+  each (game rules only, not the narrator's teasing). The app plays the
   square's track by itself, so say "멈춘 칸의 트랙을 듣습니다" instead of telling the player to play a file.
 - title: the map's title in Korean. subtitle: the work title in Korean.
 """
@@ -162,12 +196,16 @@ def _image_part(path):
                                                "detail": "high"}}
 
 
-def ask_ai(map_path, rule_path, tracks, title):
+def ask_ai(map_path, rule_path, tracks, title, sub_path=None):
     key = subgen.openai_key()
     if not key:
         raise ValueError("OpenAI 키가 없습니다 (openai_key.txt)")
     files = "\n".join(PurePosixPath(t["path"]).name for t in tracks)
-    content = [{"type": "text", "text": PROMPT.format(files=files, title=title)}, _image_part(map_path)]
+    first = opening_track(tracks)
+    transcript = read_transcript(sub_path) if sub_path else ""
+    prompt = PROMPT.format(files=files, title=title, opening=PurePosixPath(first["path"]).name if first else "-",
+                           transcript=transcript or "(no subtitles yet)")
+    content = [{"type": "text", "text": prompt}, _image_part(map_path)]
     if rule_path:
         content.append(_image_part(rule_path))
     schema_ok = True
@@ -275,6 +313,6 @@ def validate(d, tracks):
     }
 
 
-def generate(map_path, rule_path, tracks, title):
-    """지도를 읽어 검사까지 마친 판 정의. 실패하면 ValueError / requests 예외"""
-    return validate(ask_ai(map_path, rule_path, tracks, title), tracks)
+def generate(map_path, rule_path, tracks, title, sub_path=None):
+    """지도(와 규칙 이미지, 첫 음성 자막)를 읽어 검사까지 마친 판 정의. 실패하면 ValueError / requests 예외"""
+    return validate(ask_ai(map_path, rule_path, tracks, title, sub_path), tracks)

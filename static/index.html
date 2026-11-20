@@ -1455,7 +1455,9 @@ function renderBoardNote() {
   const i = bInfo;
   const msg = i.source === "manual" ? "" :
     i.pending ? "AI가 지도를 읽는 중이에요. 1~2분쯤 걸리고, 끝나면 판이 바뀝니다. 그동안은 번호 순서대로 이은 기본 판이에요." :
-    i.source === "ai" ? "AI가 지도를 읽어 만든 판이에요. 원본 지도와 다르면 다시 만들어 보세요." :
+    i.source === "ai" ? (i.transcriptNew
+      ? "AI가 첫 음성 자막 없이 지도만 보고 만든 판이에요. 이제 자막이 있으니 다시 만들면 음성으로 설명한 규칙까지 반영해요."
+      : "AI가 지도를 읽어 만든 판이에요. 원본 지도와 다르면 다시 만들어 보세요.") :
     `번호 순서대로 이은 기본 판이에요. ${i.error || "지도를 읽지 못했습니다"}`;
   const btns = (i.map ? `<button data-a="map">원본 지도</button>` : "") +
     (i.source !== "manual" && i.map && !i.pending ? `<button data-a="regen">다시 만들기</button>` : "");

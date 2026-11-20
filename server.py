@@ -416,12 +416,20 @@ BOARD_CACHE = CACHE_DIR / "boards"
 _board_jobs, _board_lock = set(), threading.Lock()
 
 
+def _opening_sub(tracks):
+    """첫 음성(START 칸) 트랙의 자막 파일. 아직 없으면 None"""
+    t = boardgen.opening_track(tracks)
+    return WORKS_DIR / t["srt"] if t and t.get("srt") else None
+
+
 def _board_job(key, map_path, rule_path, tracks, title):
+    sub = _opening_sub(tracks)
     try:
-        out = {"def": boardgen.generate(map_path, rule_path, tracks, title)}
+        out = {"def": boardgen.generate(map_path, rule_path, tracks, title, sub)}
     except Exception as e:  # noqa: BLE001 — 어떤 실패든 기본 판으로 돌아가고 이유를 보여 준다
         out = {"error": str(e)[:300]}
     out["time"] = time.time()
+    out["transcript"] = bool(sub)   # 첫 음성 자막을 읽고 만들었는지
     try:
         BOARD_CACHE.mkdir(parents=True, exist_ok=True)
         tmp = BOARD_CACHE / f"{key}.json.tmp"
@@ -460,7 +468,9 @@ def api_board(work_id):
             except (OSError, ValueError):
                 data = {}
             if data.get("def"):
-                return jsonify({"def": data["def"], "source": "ai", "map": map_rel})
+                # 첫 음성 자막 없이 만든 판인데 이제 자막이 있으면 다시 만들기를 권한다
+                fresh = not data.get("transcript") and _opening_sub(tracks) is not None
+                return jsonify({"def": data["def"], "source": "ai", "map": map_rel, "transcriptNew": fresh})
             if data.get("error"):
                 return jsonify({**out, "error": data["error"]})
         if not map_rel:
