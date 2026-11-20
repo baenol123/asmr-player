@@ -1591,7 +1591,7 @@ function renderBoard() {
   const minus = (def.dice.find(d => d.key === st.diff) || {}).minus || 0;
   const moved = `<b>${st.roll}칸</b>` + (st.raw && minus ? ` (주사위 ${st.raw} − ${minus}${st.raw - minus < 1 ? ", 1칸으로" : ""})` : "");
   $("b-msg").innerHTML =
-    !st.started ? "<b>START</b> 칸을 눌러 시작 음성을 들으세요" :
+    !st.started ? `<b>START</b> 칸을 눌러 시작 음성을 들으세요<span class="b-via">빛나지 않은 칸도 누르면 말을 그 칸으로 옮겨 들어요</span>` :
     done ? "<b>골인!</b> 다시 하려면 처음부터를 누르세요" :
     st.targets.length > 1 ? `${moved} — 빛나는 칸 중 갈 곳을 고르세요${viaMsg}` :
     st.targets.length ? `${moved} — 빛나는 칸을 누르세요${viaMsg}` :
@@ -1627,29 +1627,25 @@ function rollBoardDice() {
 
 function tapTile(n) {
   const st = bState;
-  if (!st.started) {
-    if (n !== bDef.start) { showToast("START 칸부터 시작해요"); return; }
-    st.started = true; st.seen = [n];
-    saveBoardState(); renderBoard(); playBoardTiles([n]);
-    return;
-  }
-  const exits = !st.targets.length && st.pos !== bDef.goal ? boardExits(bDef, st.pos) : [];
+  const exits = st.started && !st.targets.length && st.pos !== bDef.goal ? boardExits(bDef, st.pos) : [];
   if (exits.length > 1 && exits.includes(n)) {   // 굴리기 전에 방향 고르기 (다시 누르면 바꾼다)
     st.dir = n;
     saveBoardState(); renderBoard();
     return;
   }
-  if (st.targets.includes(n)) {
+  if (st.started && st.targets.includes(n)) {
     const tolls = boardMoves(bDef, st.pos, st.roll, st.dir).get(n) || [];   // 지나온 지름길 칸은 먼저 듣는다
     st.pos = n; st.targets = []; st.noMove = false; st.dir = null;
     for (const k of [...tolls, n]) if (!st.seen.includes(k)) st.seen.push(k);
     saveBoardState(); renderBoard(); playBoardTiles([...tolls, n]);
-  } else if (n === st.pos) {
-    playBoardTiles([n]);   // 지금 칸 다시 듣기
-  } else {
-    showToast(st.targets.length ? "빛나는 칸을 눌러 주세요" :
-      exits.length > 1 ? "빛나는 칸 중 갈 방향을 먼저 고르세요" : "주사위를 굴린 뒤 빛나는 칸을 누르세요");
+    return;
   }
+  if (st.started && n === st.pos) { playBoardTiles([n]); return; }   // 지금 칸 다시 듣기
+  // 빛나지 않은 칸도 누르면 말을 그 칸으로 옮겨 듣는다 (판을 잘못 읽었거나 작품 규칙이 앱과 다를 때)
+  if (st.started && st.targets.length) showToast("빛나지 않은 칸으로 옮겼어요");
+  st.started = true; st.pos = n; st.targets = []; st.noMove = false; st.dir = null;
+  if (!st.seen.includes(n)) st.seen.push(n);
+  saveBoardState(); renderBoard(); playBoardTiles([n]);
 }
 
 // 칸들의 트랙을 차례로 튼다. 자동 넘김 설정과 상관없이 이어서 틀고, 다 들으면 놀이판으로 돌아온다
